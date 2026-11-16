@@ -777,9 +777,33 @@ body {
   color: var(--ink);
 }
 
+.sidebar {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  padding: 16px 14px 14px;
+}
+.brand-lockup { padding: 0 6px 14px; }
+.nav-label { margin: 14px 9px 6px; font-size: 11px; color: #9ec0bc; }
+.nav-item { min-height: 37px; }
+.help-card { margin: 10px 2px 12px; padding: 10px 12px; }
+.main-shell { overflow-x: hidden; }
+.page-content { padding: 20px 28px 40px; }
+
+@media (max-width: 1180px) {
+  .warehouse-overview-grid,
+  .summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .metric-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .breadcrumbs { font-size: 13px; color: #526769; }
 .nav-item span:nth-child(2) { font-size: 14px; }
-.nav-label { font-size: 11px; color: #9ec0bc; }
 .plant-link { font-size: 13px; }
 .workspace-copy strong { font-size: 14px; }
 .workspace-copy span { font-size: 12px; }
@@ -860,8 +884,13 @@ table td small { font-size: 12px; color: var(--muted); }
 :root[data-theme='dark'] .panel,
 :root[data-theme='dark'] .summary-card,
 :root[data-theme='dark'] .metric-card,
+:root[data-theme='dark'] .metric-strip,
 :root[data-theme='dark'] .metric-inline,
 :root[data-theme='dark'] .warehouse-overview-card,
+:root[data-theme='dark'] .warehouse-card-btn,
+:root[data-theme='dark'] .catalog-summary > div,
+:root[data-theme='dark'] .task-card,
+:root[data-theme='dark'] .import-source-card,
 :root[data-theme='dark'] .modal-card,
 :root[data-theme='dark'] .guide-step-card,
 :root[data-theme='dark'] .sitemap-card,
@@ -871,6 +900,111 @@ table td small { font-size: 12px; color: var(--muted); }
 :root[data-theme='dark'] .mm-stage-box {
   background: #132025;
   border-color: #294149;
+  color: #f1f7f6;
+}
+
+:root[data-theme='dark'] .warehouse-card-btn:hover {
+  background: #192b32;
+  border-color: #38bdf8;
+}
+:root[data-theme='dark'] .warehouse-card-top strong,
+:root[data-theme='dark'] .catalog-summary > div strong,
+:root[data-theme='dark'] .metric-inline strong {
+  color: #f4f9f8;
+}
+:root[data-theme='dark'] .warehouse-card-metrics span,
+:root[data-theme='dark'] .catalog-summary > div span {
+  color: #b4c8c6;
+}
+:root[data-theme='dark'] .metric-inline + .metric-inline {
+  border-left-color: #294149;
+}
+
+:root[data-theme='dark'] .button-ghost {
+  background: #192a30;
+  color: #e6f1ef;
+}
+:root[data-theme='dark'] .button-ghost:hover {
+  background: #233a42;
+  color: #ffffff;
+}
+
+:root[data-theme='dark'] .task-source,
+:root[data-theme='dark'] .import-private-note,
+:root[data-theme='dark'] .setup-footnote,
+:root[data-theme='dark'] .setup-steps code,
+:root[data-theme='dark'] .plant-check {
+  background: #182a30;
+  border-color: #2c4750;
+  color: #d6e8e6;
+}
+:root[data-theme='dark'] .plant-check.checked {
+  background: #143b38;
+  border-color: #2dd4bf;
+  color: #99f6e4;
+}
+:root[data-theme='dark'] .task-template-button:hover {
+  background: #1d3239;
+}
+:root[data-theme='dark'] .task-error,
+:root[data-theme='dark'] .form-error,
+:root[data-theme='dark'] .login-error {
+  background: #3b1919;
+  border-color: #7f2d2d;
+  color: #fca5a5;
+}
+:root[data-theme='dark'] .setup-steps b {
+  background: #18363a;
+  color: #99f6e4;
+}
+
+:root[data-theme='dark'] .plant-tag { background: #1e3138; color: #dbe9e7; }
+:root[data-theme='dark'] .plant-tag.violet { background: #2c2142; color: #d8b4fe; }
+:root[data-theme='dark'] .plant-tag.blue { background: #172e47; color: #93c5fd; }
+:root[data-theme='dark'] .plant-tag.green { background: #133626; color: #86efac; }
+
+:root[data-theme='dark'] .metric-icon.teal,
+:root[data-theme='dark'] .task-icon.teal,
+:root[data-theme='dark'] .source-icon.teal,
+:root[data-theme='dark'] .all-clear > div,
+:root[data-theme='dark'] .empty-illustration,
+:root[data-theme='dark'] .requirements-empty .empty-icon {
+  background: #143632;
+  border-color: #245c55;
+  color: #5eead4;
+}
+:root[data-theme='dark'] .metric-icon.blue,
+:root[data-theme='dark'] .task-icon.blue,
+:root[data-theme='dark'] .source-icon.blue {
+  background: #152d44;
+  color: #93c5fd;
+}
+:root[data-theme='dark'] .metric-icon.amber,
+:root[data-theme='dark'] .task-icon.amber {
+  background: #362811;
+  color: #fcd34d;
+}
+:root[data-theme='dark'] .metric-icon.rose {
+  background: #3b1919;
+  color: #fca5a5;
+}
+:root[data-theme='dark'] .task-icon.green {
+  background: #133626;
+  color: #86efac;
+}
+:root[data-theme='dark'] .task-icon.violet {
+  background: #2c2142;
+  color: #d8b4fe;
+}
+
+:root[data-theme='dark'] .login-screen,
+:root[data-theme='dark'] .loading-screen {
+  background: #0b1417;
+  color: #f1f7f6;
+}
+:root[data-theme='dark'] .login-card input {
+  background: #0e191d;
+  border-color: #335059;
   color: #f1f7f6;
 }
 
