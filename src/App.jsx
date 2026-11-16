@@ -587,7 +587,7 @@ function Sidebar({ page, setPage, selectedWarehouse, onSelectWarehouse, mobileOp
 function ExecLineTrendChart({ series }) {
   const [hoverIdx, setHoverIdx] = useState(null);
   if (!series.length) return <EmptyInline text="Chưa có dữ liệu tiến độ theo kỳ để vẽ xu hướng." />;
-  const W = 640, H = 230, padL = 54, padR = 18, padT = 18, padB = 34;
+  const W = 680, H = 235, padL = 62, padR = 40, padT = 18, padB = 34;
   const innerW = W - padL - padR, innerH = H - padT - padB;
   const maxVal = Math.max(1, ...series.flatMap((d) => [d.planned, d.cut, d.received]));
   const xAt = (i) => padL + (series.length === 1 ? innerW / 2 : (i / (series.length - 1)) * innerW);
@@ -740,7 +740,7 @@ function Dashboard({ data, setPage, onOpenWarehouse }) {
       const bucket = byPeriod.get(ym);
       bucket.planned += p; bucket.cut += c; bucket.received += r;
     }
-    const series = [...byPeriod.values()].sort((a, b) => a.label.localeCompare(b.label)).slice(-10);
+    const series = [...byPeriod.values()].sort((a, b) => a.label.localeCompare(b.label));
     return { planned, cut, sew, go, received, lafWip, lvfGoWip, series };
   }, [orders]);
 
