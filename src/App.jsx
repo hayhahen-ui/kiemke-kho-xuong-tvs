@@ -691,7 +691,12 @@ function ExecDonutChart({ segments, centerValue, centerLabel }) {
 }
 
 function Dashboard({ data, setPage, onOpenWarehouse }) {
-  const orders = currentOrderRows(data);
+  const isAccessoryOrder = (o) => /PHU\s*KIEN|PHỤ\s*KIỆN|ACCESSORY|PHU\s*LIEU|PHỤ\s*LIỆU/i.test(
+    `${o.productType || ''} ${o.sourceSheet || ''} ${o.model || ''} ${o.customer || ''}`
+  );
+  const prodBatchOrders = currentImportedRows(data.productionOrders, data.importMeta, 'production-orders');
+  const rawOrders = prodBatchOrders.length ? prodBatchOrders : (data.orders || []);
+  const orders = rawOrders.filter((o) => !isAccessoryOrder(o));
   const countRows = data.workshopCounts?.rows || [];
   const materialIssues = data.materialIssues || [];
 
@@ -717,7 +722,7 @@ function Dashboard({ data, setPage, onOpenWarehouse }) {
   }, [data, countRows, materialIssues]);
 
   const prodStats = useMemo(() => {
-    let planned = 0, cut = 0, sew = 0, go = 0, received = 0;
+    let planned = 0, cut = 0, sew = 0, go = 0, received = 0, lafWip = 0, lvfGoWip = 0;
     const byPeriod = new Map();
     for (const o of orders) {
       const eff = resolveEffectiveStageQuantities(o.stageQuantities);
@@ -727,6 +732,8 @@ function Dashboard({ data, setPage, onOpenWarehouse }) {
       const g = eff.LVF_GO ?? 0;
       const r = Number(o.stageQuantities?.RECEIVED) || 0;
       planned += p; cut += c; sew += s; go += g; received += r;
+      lafWip += Math.max(0, p - c);
+      lvfGoWip += Math.max(0, p - g);
       const rawDate = String(o.dueDate || o.orderDate || '').trim();
       const ym = /^\d{4}[\/-]\d{2}/.test(rawDate) ? rawDate.slice(0, 7).replace('-', '/') : 'Chưa gắn kỳ';
       if (!byPeriod.has(ym)) byPeriod.set(ym, { label: ym, planned: 0, cut: 0, received: 0 });
@@ -734,7 +741,7 @@ function Dashboard({ data, setPage, onOpenWarehouse }) {
       bucket.planned += p; bucket.cut += c; bucket.received += r;
     }
     const series = [...byPeriod.values()].sort((a, b) => a.label.localeCompare(b.label)).slice(-10);
-    return { planned, cut, sew, go, received, series };
+    return { planned, cut, sew, go, received, lafWip, lvfGoWip, series };
   }, [orders]);
 
   const issueBreakdown = useMemo(() => {
@@ -783,10 +790,10 @@ function Dashboard({ data, setPage, onOpenWarehouse }) {
       </div>
 
       <div className="summary-grid">
-        <MetricCard label="SẢN LƯỢNG ĐƠN HÀNG" value={`${money(prodStats.planned)} đôi`} detail={`Nhập kho ${money(prodStats.received)} đôi (${completionPct}%) · Dở dang Chặt ${money(Math.max(0, prodStats.planned - prodStats.cut))}`} icon={Layers3} tint="blue" />
-        <MetricCard label="ĐỘ PHỦ KIỂM ĐẾM 4 KHO" value={`${countPct}%`} detail={`${money(totalCounted)} / ${money(totalGroups)} nhóm vật tư đã đếm · ${money(totalVarianceGroups)} nhóm lệch`} icon={ClipboardCheck} tint="teal" />
-        <MetricCard label="XUẤT KHO TỔNG (DỞ DANG)" value={money(issueBreakdown.WIP, 1)} detail={`Đã xong/Nhập kho: ${money(issueBreakdown.DONE, 0)} · Không PO: ${money(issueBreakdown.NO_PO, 0)}`} icon={Boxes} tint="amber" />
-        <MetricCard label="CẢNH BÁO QUẢN TRỊ" value={money(totalUnmapped + stageAnomalies.length)} detail={`${money(totalUnmapped)} dòng chưa ghép · ${money(stageAnomalies.length)} đơn thiếu ghi nhận Chặt/May`} icon={CircleAlert} tint="rose" />
+        <MetricCard label="TỔNG SỐ ĐÔI CẦN SẢN XUẤT" value={`${money(prodStats.planned)} đôi`} detail={`${money(orders.length)} chỉ lệnh (không tính phụ kiện) · Nhập kho ${money(prodStats.received)} đôi (${completionPct}%)`} icon={Layers3} tint="blue" />
+        <MetricCard label="TỔNG SỐ ĐÔI TẠI LAF (CHẶT)" value={`${money(prodStats.cut)} / ${money(prodStats.lafWip)}`} detail={`Đã sản xuất: ${money(prodStats.cut)} đôi · Dở dang: ${money(prodStats.lafWip)} đôi`} icon={Boxes} tint="teal" />
+        <MetricCard label="TỔNG SỐ ĐÔI TẠI LVF (MAY / GÒ)" value={`${money(prodStats.go)} / ${money(prodStats.lvfGoWip)}`} detail={`Đã Gò: ${money(prodStats.go)} (May ${money(prodStats.sew)}) · Dở dang: ${money(prodStats.lvfGoWip)} đôi`} icon={ClipboardCheck} tint="amber" />
+        <MetricCard label="KIỂM ĐẾM & CẢNH BÁO 4 KHO" value={`${countPct}%`} detail={`${money(totalCounted)}/${money(totalGroups)} nhóm đã đếm · ${money(totalVarianceGroups)} lệch · ${money(totalUnmapped)} chưa ghép`} icon={CircleAlert} tint="rose" />
       </div>
 
       <div className="exec-charts-grid">

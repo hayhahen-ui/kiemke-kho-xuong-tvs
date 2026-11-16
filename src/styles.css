@@ -821,6 +821,9 @@ body {
 
 .summary-card span, .metric-inline span { font-size: 11.5px; color: var(--muted); }
 .summary-card strong, .metric-inline strong { font-size: 23px; }
+.metric-label { font-size: 12px; font-weight: 700; letter-spacing: .06em; color: #476063; }
+.metric-value { font-size: 25px; font-weight: 800; color: #0f292d; letter-spacing: -.03em; }
+.metric-detail { font-size: 13px; color: #465b5e; line-height: 1.45; }
 .warehouse-overview-card strong { font-size: 15px; }
 .warehouse-overview-card small { font-size: 12.5px; color: var(--muted); }
 
@@ -1323,8 +1326,15 @@ table td small { font-size: 12px; color: var(--muted); }
 :root[data-theme='dark'] h1,
 :root[data-theme='dark'] h2,
 :root[data-theme='dark'] h3,
-:root[data-theme='dark'] strong {
-  color: #f4f9f8;
+:root[data-theme='dark'] strong,
+:root[data-theme='dark'] .metric-value {
+  color: #ffffff;
+}
+:root[data-theme='dark'] .metric-label {
+  color: #cbd5e1;
+}
+:root[data-theme='dark'] .metric-detail {
+  color: #e2e8f0;
 }
 
 :root[data-theme='dark'] .eyebrow,
