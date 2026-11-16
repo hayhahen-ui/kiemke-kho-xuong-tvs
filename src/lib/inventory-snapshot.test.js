@@ -55,7 +55,7 @@ test('export contains metadata, per-material and per-order results and gaps',asy
  const result=calculateInventorySnapshot(data,'LAF',{mode:'issued',issuedRows:issued});
  const buf=await createSnapshotWorkbook(result,{asOf:'2026-11-14T10:00',warehouse:'Kho xưởng LAF',modeLabel:'Số đôi đã lĩnh'});
  const wb=new ExcelJS.Workbook(); await wb.xlsx.load(buf);
- assert.deepEqual(wb.worksheets.map(s=>s.name),['ThongTin','TongHop','TheoDon','ChuaGhep']);
+ assert.deepEqual(wb.worksheets.map(s=>s.name),['ThongTin','TongHop','TheoDon','ChuaGhep','GiaiThich']);
  assert.equal(wb.getWorksheet('TongHop').getCell('E2').value,110);
  assert.equal(wb.getWorksheet('TheoDon').getCell('H2').value,300);
 });
@@ -193,4 +193,20 @@ test('compareSnapshotCounts and mergeRowsByMaterialName include PO-matched issue
  assert.equal(merged[0].issuedFromMain,90);
  assert.equal(merged[0].actual,80);
  assert.equal(merged[0].variance,-20);
+});
+test('createSnapshotWorkbook adds GiaiThich sheet for orders with Nhập kho/Đóng thùng but missing Chặt/May/Gò',async()=>{
+ const calc=calculateInventorySnapshot(data,'LAF',{mode:'planned'});
+ const prodOrders=[
+  {orderNo:'DH_MISSING',purchaseOrder:'PO_NO_ISSUE',model:'C',color:'1',plannedQty:344,stageQuantities:{LAF_CUT:0,LVF_SEW:0,LVF_GO:0,PACKED:344,RECEIVED:344}},
+  {orderNo:'DH_OK',purchaseOrder:'PO_OK',model:'A',color:'2',plannedQty:100,stageQuantities:{LAF_CUT:100,LVF_SEW:100,LVF_GO:100,PACKED:100,RECEIVED:100}},
+ ];
+ const bytes=await createSnapshotWorkbook(calc,{asOf:'2026-11-16T15:00',warehouse:'Kho xưởng LAF',warehouseId:'LAF',modeLabel:'SL đơn hàng',productionOrders:prodOrders,materialIssues:[]});
+ const wb=new ExcelJS.Workbook(); await wb.xlsx.load(bytes);
+ const sheet=wb.getWorksheet('GiaiThich');
+ assert.ok(sheet);
+ assert.equal(sheet.rowCount,2);
+ assert.equal(sheet.getCell('A2').value,'DH_MISSING');
+ assert.equal(sheet.getCell('I2').value,344);
+ assert.equal(sheet.getCell('J2').value,344);
+ assert.ok(String(sheet.getCell('L2').value).includes('Không có xuất NVL theo PO'));
 });

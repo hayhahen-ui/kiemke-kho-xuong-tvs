@@ -148,17 +148,69 @@ export async function createIssuedTemplate() {
   s.addRow(['Kho','Chỉ lệnh','Mã hàng','Màu','Số đôi đã lĩnh']); s.views=[{state:'frozen',ySplit:1}]; s.columns.forEach(c=>{c.width=25;});
   return wb.xlsx.writeBuffer();
 }
+export function buildStageExplanationRows(productionOrders = [], materialIssues = [], warehouseId = '') {
+  const poIssueCount = new Map();
+  for (const iss of materialIssues || []) {
+    if (warehouseId && iss.warehouseId && iss.warehouseId !== warehouseId) continue;
+    const po = norm(iss.po);
+    if (!po || !(Number(iss.issuedQty) > 0)) continue;
+    poIssueCount.set(po, (poIssueCount.get(po) || 0) + 1);
+  }
+  const rows = [];
+  for (const order of productionOrders || []) {
+    const s = order.stageQuantities || {};
+    const received = numberOrNull(s.RECEIVED) ?? 0;
+    const packed = numberOrNull(s.PACKED) ?? 0;
+    const downstreamEnd = Math.max(received, packed);
+    if (downstreamEnd <= 0) continue;
+
+    const rawChat = numberOrNull(s.LAF_CUT);
+    const rawMay = numberOrNull(s.LVF_SEW);
+    const rawGo = numberOrNull(s.LVF_GO);
+    const missingStages = [];
+    if ((rawChat ?? 0) < downstreamEnd) missingStages.push(`Chặt=${rawChat ?? 'trống'}`);
+    if ((rawMay ?? 0) < downstreamEnd) missingStages.push(`May=${rawMay ?? 'trống'}`);
+    if ((rawGo ?? 0) < downstreamEnd) missingStages.push(`Gò=${rawGo ?? 'trống'}`);
+    if (!missingStages.length) continue;
+
+    const poKey = norm(order.purchaseOrder);
+    const issueLines = poKey ? (poIssueCount.get(poKey) || 0) : 0;
+    const issueNote = issueLines > 0 ? `Có ${issueLines} dòng xuất NVL theo PO` : 'Không có xuất NVL theo PO';
+    const explanation = `Đã đóng thùng/nhập kho ${downstreamEnd} đôi nhưng thiếu ghi nhận (${missingStages.join(', ')}); ${issueNote}. Hệ thống tự suy luận đã SX tối thiểu ${downstreamEnd} đôi.`;
+    rows.push({
+      orderNo: order.orderNo || '',
+      purchaseOrder: order.purchaseOrder || '',
+      model: order.model || '',
+      color: order.color || '',
+      plannedQty: numberOrNull(order.plannedQty) ?? 0,
+      rawChat: rawChat ?? 0,
+      rawMay: rawMay ?? 0,
+      rawGo: rawGo ?? 0,
+      packed,
+      received,
+      issueLines,
+      explanation,
+    });
+  }
+  return rows;
+}
+
 export async function createSnapshotWorkbook(result, metadata) {
   const { default: ExcelJS }=await import('exceljs'); const wb=new ExcelJS.Workbook();
   const info=wb.addWorksheet('ThongTin');
-  for (const row of [['Mốc kiểm kê',metadata.asOf],['Kho',metadata.warehouse],['Công đoạn',result.stage],['Cơ sở',metadata.modeLabel],['Cách gộp',metadata.groupByName ? 'Gộp theo tên vật tư (ghép chung mã)' : 'Tách theo mã vật tư'],['Múi giờ thiết bị',metadata.timeZone || ''],['File tiến độ',metadata.progressSource || ''],['File định mức',metadata.normSource || ''],['File số đôi đã lĩnh',metadata.issuedSource || ''],['File kiểm đếm',metadata.countSource || ''],['Ghi chú','Tính theo dữ liệu đã nạp hiện tại, không tự dựng lại dữ liệu quá khứ. Số dở dang theo định mức; không phải tồn sổ.'],['Cảnh báo','Kiểm tra ChuaGhep; kết quả có thể chưa đầy đủ.']]) info.addRow(row); info.columns=[{width:25},{width:85}];
+  for (const row of [['Mốc kiểm kê',metadata.asOf],['Kho',metadata.warehouse],['Công đoạn',result.stage],['Cơ sở',metadata.modeLabel],['Cách gộp',metadata.groupByName ? 'Gộp theo tên vật tư (ghép chung mã)' : 'Tách theo mã vật tư'],['Múi giờ thiết bị',metadata.timeZone || ''],['File tiến độ',metadata.progressSource || ''],['File định mức',metadata.normSource || ''],['File số đôi đã lĩnh',metadata.issuedSource || ''],['File kiểm đếm',metadata.countSource || ''],['Ghi chú','Tính theo dữ liệu đã nạp hiện tại, không tự dựng lại dữ liệu quá khứ. Số dở dang theo định mức; không phải tồn sổ.'],['Cảnh báo','Kiểm tra ChuaGhep và GiaiThich; kết quả có thể chưa đầy đủ.']]) info.addRow(row); info.columns=[{width:25},{width:85}];
   const sum=wb.addWorksheet('TongHop'); sum.addRow(['Mã vật tư','Tên vật tư','Đơn vị','Số chỉ lệnh','Tồn lý thuyết theo dở dang']);
   if (metadata.comparison) { sum.getRow(1).getCell(6).value='Đã lãnh kho tổng'; sum.getRow(1).getCell(7).value='Kiểm đếm thực tế'; sum.getRow(1).getCell(8).value='Chênh lệch tạm tính'; sum.getRow(1).getCell(9).value='Ghi chú'; }
   (metadata.comparison || metadata.summaryRows || result.summary).forEach(r=>sum.addRow([r.materialCode,r.materialName,r.unit,r.orderCount,r.quantity, ...(metadata.comparison ? [r.issuedFromMain,r.actual,r.variance,r.comparison] : [])]));
   const detail=wb.addWorksheet('TheoDon'); detail.addRow(['Chỉ lệnh','PO','Mã hàng','Màu','Công đoạn','Số đôi cơ sở','Đã qua công đoạn','Còn lại','Mã vật tư','Tên vật tư','ĐVT','Định mức/đôi','Tồn lý thuyết','Nguồn','Dòng nguồn']);
   result.rows.forEach(r=>detail.addRow([r.orderNo,r.purchaseOrder,r.model,r.color,r.stage,r.qty,r.done,r.basisQty,r.materialCode,r.materialName,r.unit,r.rate,r.quantity,r.source,r.sourceRow]));
   const gaps=wb.addWorksheet('ChuaGhep'); gaps.addRow(['Chỉ lệnh','Mã hàng','Màu','Mã vật tư','Lý do']); result.unmapped.forEach(r=>gaps.addRow([r.productionOrder || r.orderNo || '',r.model || '',r.color || '',r.materialCode || '',r.reason || '']));
-  for(const s of [sum,detail,gaps]) {s.views=[{state:'frozen',ySplit:1}]; s.columns.forEach(c=>{c.width=22;}); s.getRow(1).font={bold:true};}
+  const explain=wb.addWorksheet('GiaiThich');
+  explain.addRow(['Chỉ lệnh','PO','Mã hàng','Màu','SL đơn hàng','Chặt (gốc)','May (gốc)','Gò (gốc)','Đóng thùng','Nhập kho','Xuất NVL theo PO (dòng)','Giải thích & Xử lý hệ thống']);
+  const explainRows = buildStageExplanationRows(metadata.productionOrders, metadata.materialIssues, metadata.warehouseId);
+  explainRows.forEach(r=>explain.addRow([r.orderNo,r.purchaseOrder,r.model,r.color,r.plannedQty,r.rawChat,r.rawMay,r.rawGo,r.packed,r.received,r.issueLines,r.explanation]));
+  for(const s of [sum,detail,gaps,explain]) {s.views=[{state:'frozen',ySplit:1}]; s.columns.forEach(c=>{c.width=22;}); s.getRow(1).font={bold:true};}
+  explain.getColumn(12).width = 65;
   return wb.xlsx.writeBuffer();
 }
 
