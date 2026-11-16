@@ -10,7 +10,7 @@ import { createTaskWorkbook, importTaskWorkbook, taskFilename } from './lib/task
 import { loadLocalState, saveLocalState } from './lib/local-db.js';
 import { supabase, cloudMode } from './lib/supabase.js';
 import { ensureWorkspace, loadWorkspaceRecords, saveWorkspaceRecords } from './lib/cloud.js';
-import { calculateInventorySnapshot, readIssuedWorkbook, createIssuedTemplate, createSnapshotWorkbook, readCountWorkbook, readWorkshopCounts, createCountTemplate, compareSnapshotCounts } from './lib/inventory-snapshot.js';
+import { calculateInventorySnapshot, readIssuedWorkbook, createIssuedTemplate, createSnapshotWorkbook, readCountWorkbook, readWorkshopCounts, createCountTemplate, compareSnapshotCounts, mergeRowsByMaterialName } from './lib/inventory-snapshot.js';
 import { fetchRealDataBundle } from './lib/real-data.js';
 
 const emptyData = () => ({ materials: [], bom: [], orders: [], productionOrders: [], productMappings: [], orderMappings: [], chemicalNorms: [], importMeta: {}, inventory: {}, norms: [], workshopCounts: null });
@@ -828,6 +828,7 @@ function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts }) {
   const [query, setQuery] = useState('');
   const [snapshotTab, setSnapshotTab] = useState('summary');
   const [countFilter, setCountFilter] = useState('Tất cả');
+  const [groupByName, setGroupByName] = useState(true);
 
   const countRows = customCounts?.rows || data.workshopCounts?.rows || [];
   const countFile = customCounts?.file || (data.workshopCounts?.rows?.length ? 'Mau_01_Thong_Ke_Xuong_Doi_Chieu_Kiem_Ke.xlsx' : '');
@@ -836,7 +837,11 @@ function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts }) {
   const labels = {issued:'Số đôi đã lĩnh theo file', released:'SL phát lệnh (cột T) — giả định đã lĩnh', planned:'SL đơn hàng (cột S) trong TIEN-DO-SX-DONHANG'};
   const calc = useMemo(() => mode === 'issued' && !issuedRows.length ? {ready:false,rows:[],summary:[],unmapped:[],hasSource:false} : calculateInventorySnapshot(data, selectedWarehouse, {mode,lvfStage,issuedRows}), [data,selectedWarehouse,mode,lvfStage,issuedRows]);
   const comparison = useMemo(() => countRows.length ? compareSnapshotCounts(calc, countRows, selectedWarehouse) : null, [calc,countRows,selectedWarehouse]);
-  const rows = (comparison || calc.summary).filter(r => {
+  const displaySummary = useMemo(() => {
+    const base = comparison || calc.summary;
+    return groupByName ? mergeRowsByMaterialName(base) : base;
+  }, [comparison, calc.summary, groupByName]);
+  const rows = displaySummary.filter(r => {
     const matchText = `${r.materialCode} ${r.materialName}`.toLowerCase().includes(query.toLowerCase());
     if (!matchText) return false;
     if (countFilter === 'Đã kiểm đếm') return r.actual !== null && r.actual !== undefined;
@@ -850,7 +855,7 @@ function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts }) {
   const importIssued = async (file) => { try { const rows=await readIssuedWorkbook(file); setIssuedRows(rows); setIssuedFile(file.name); setError(''); } catch(e) { setIssuedRows([]); setIssuedFile(''); setError(e.message || 'Không đọc được file số đôi đã lĩnh.'); } };
   const importCount = async (file) => { try { const rows=await readCountWorkbook(file); const payload = { rows, warnings: [], dates: null }; setCustomCounts({ rows, file: file.name, notes: null }); if (onSaveCounts) await onSaveCounts(payload); setError(''); } catch(e) { setError(e.message || 'Không đọc được file kiểm đếm.');} };
   const importWorkshopCounts = async (file) => { try { const result=await readWorkshopCounts(file); setCustomCounts({ rows: result.rows, file: file.name, notes: result }); if (onSaveCounts) await onSaveCounts(result); setError(''); } catch(e) { setError(e.message || 'Không đọc được workbook thống kê.');} };
-  const exportResult = async () => { try { const bytes=await createSnapshotWorkbook(calc,{asOf,warehouse:selectedWarehouseInfo?.name,modeLabel:labels[mode],timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone,progressSource:data.importMeta?.['production-orders']?.sourceFile || '',normSource:data.importMeta?.['chemical-norms:' + selectedWarehouse]?.sourceFile || 'BOM hoặc nguồn chưa ghi tên',issuedSource:issuedFile,countSource:countFile + (countNotes ? ' | ' + Object.values(countNotes.dates).join(' | ') + ' | Lưu ý: mốc đếm có thể khác mốc tiến độ; đối chiếu chỉ tạm tính.' : ''),comparison}); download(bytes,`Ton_kiem_ke_${selectedWarehouse}.xlsx`); setError(''); } catch(e) {setError(e.message || 'Không xuất được file.');} };
+  const exportResult = async () => { try { const bytes=await createSnapshotWorkbook(calc,{asOf,warehouse:selectedWarehouseInfo?.name,modeLabel:labels[mode],groupByName,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone,progressSource:data.importMeta?.['production-orders']?.sourceFile || '',normSource:data.importMeta?.['chemical-norms:' + selectedWarehouse]?.sourceFile || 'BOM hoặc nguồn chưa ghi tên',issuedSource:issuedFile,countSource:countFile + (countNotes ? ' | ' + Object.values(countNotes.dates).join(' | ') + ' | Lưu ý: mốc đếm có thể khác mốc tiến độ; đối chiếu chỉ tạm tính.' : ''),comparison: comparison ? displaySummary : null,summaryRows: displaySummary}); download(bytes,`Ton_kiem_ke_${selectedWarehouse}.xlsx`); setError(''); } catch(e) {setError(e.message || 'Không xuất được file.');} };
   return <>
     <div className="page-heading"><div><div className="eyebrow">KIỂM KÊ <span>•</span> THEO ĐƠN DỞ DANG 4 KHO</div><h1>Tồn lý thuyết theo định mức</h1><p>Chặt (S − U) → Kho xưởng LAF & Hóa mẫu LAF · May/Gò (S − V/W) → Kho xưởng LVF & Hóa mẫu LVF.</p></div><button className="button button-secondary" disabled={!calc.ready || !asOf || (mode === 'issued' && !issuedRows.length)} onClick={exportResult}><ArrowDownToLine size={16} /> Xuất kết quả Excel</button></div>
     <div className="plant-tabs warehouse-tabs">{WAREHOUSES.map(w => <button key={w.id} className={selectedWarehouse === w.id ? 'active' : ''} onClick={() => { setWarehouse(w.id); setSelected(null); }}><span className={`plant-dot ${w.color}`} />{w.name}</button>)}</div>
@@ -875,7 +880,7 @@ function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts }) {
     {calc.ready && <div className="mapping-warning"><CircleAlert size={16}/>Tính theo SL đơn hàng trừ số đã sản xuất tại công đoạn; đây không phải số vật tư thực tế đã lĩnh.</div>}
     {calc.ready && (selectedWarehouse === 'HOA_MAU_LVF' || selectedWarehouse === 'LVF') && <div className="mapping-warning"><CircleAlert size={16}/>{lvfStage === 'both' ? 'Áp dụng May hoặc Gò theo cột Công đoạn sử dụng của từng dòng định mức. Dòng thiếu công đoạn được đưa vào cần rà soát, không tự cộng trùng.' : `Lần này áp dụng ${calc.stage} cho toàn bộ định mức LVF chưa gán công đoạn. Không cộng kết quả May và Gò nếu cùng một định mức.`}</div>}
     {calc.ready && calc.unmapped.length > 0 && <div className="mapping-warning"><CircleAlert size={16}/><span><strong>{money(calc.unmapped.length)} dòng cần rà soát.</strong> Chuyển sang tab <strong>Chưa ghép (ChuaGhep)</strong> bên dưới hoặc xuất Excel để kiểm tra chi tiết.</span></div>}
-    <div className="metric-strip"><MetricInline label="CÔNG ĐOẠN" value={calc.stage || 'Chưa chọn'} /><MetricInline label="MÃ VẬT TƯ ĐÃ TÍNH" value={money(calc.summary.length)} /><MetricInline label="DÒNG CHI TIẾT" value={money(calc.rows.length)} /><MetricInline label="CẦN RÀ SOÁT" value={money(calc.unmapped.length)} /></div>
+    <div className="metric-strip"><MetricInline label="CÔNG ĐOẠN" value={calc.stage || 'Chưa chọn'} /><MetricInline label={groupByName ? 'NHÓM TÊN VẬT TƯ' : 'MÃ VẬT TƯ ĐÃ TÍNH'} value={money(displaySummary.length)} /><MetricInline label="DÒNG CHI TIẾT" value={money(calc.rows.length)} /><MetricInline label="CẦN RÀ SOÁT" value={money(calc.unmapped.length)} /></div>
     <section className="panel table-panel page-table-panel">
       <div className="catalog-toolbar">
         <div className="subtabs">
@@ -883,6 +888,12 @@ function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts }) {
           <button className={snapshotTab === 'unmapped' ? 'active' : ''} onClick={() => setSnapshotTab('unmapped')}>Chưa ghép (ChuaGhep) <span>{money(unmappedRows.length)}</span></button>
         </div>
         <div className="toolbar-right" style={{flexWrap:'wrap'}}>
+          {snapshotTab === 'summary' && (
+            <div className="filter-pills">
+              <button type="button" className={groupByName ? 'selected' : ''} onClick={() => setGroupByName(true)}>Gộp theo tên vật tư (chung mã)</button>
+              <button type="button" className={!groupByName ? 'selected' : ''} onClick={() => setGroupByName(false)}>Tách theo mã</button>
+            </div>
+          )}
           {snapshotTab === 'summary' && comparison && (
             <div className="filter-pills">
               {['Tất cả', 'Đã kiểm đếm', 'Chưa đếm', 'Có chênh lệch'].map((label) => (
@@ -894,7 +905,7 @@ function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts }) {
         </div>
       </div>
       {snapshotTab === 'summary' ? (
-        calc.ready && (mode !== 'issued' || issuedRows.length) && rows.length ? <div className="table-scroll"><table><thead><tr><th>MÃ VẬT TƯ / TÊN</th><th>ĐVT</th><th className="numeric">SỐ CHỈ LỆNH</th><th className="numeric">TỒN THEO ĐỊNH MỨC</th>{comparison && <><th className="numeric">THỰC ĐẾM</th><th className="numeric">CHÊNH LỆCH</th><th>ĐỐI CHIẾU</th></>}<th>CHI TIẾT</th></tr></thead><tbody>{rows.map(r=><tr key={`${r.materialCode}|${r.unit}`}><td><strong>{r.materialCode}</strong><small>{r.materialName}</small></td><td>{r.unit}</td><td className="numeric">{money(r.orderCount)}</td><td className="numeric strong-cell">{r.quantity == null ? '—' : money(r.quantity,3)}</td>{comparison && <><td className="numeric">{r.actual == null ? '—' : money(r.actual,3)}</td><td className={`numeric ${(r.variance || 0) < 0 ? 'text-danger' : (r.variance || 0) > 0 ? 'text-warning' : ''}`}>{r.variance == null ? '—' : money(r.variance,3)}</td><td>{r.comparison}</td></>}<td>{r.details.length ? <button className="text-button" onClick={()=>setSelected(r)}>Theo đơn →</button> : '—'}</td></tr>)}</tbody></table></div> : <EmptyInline text={calc.hasSource ? 'Chưa có dòng kết quả phù hợp. Kiểm tra cơ sở, tiến độ, định mức và dòng cần rà soát.' : 'Chưa có nguồn định mức cho kho này. Kiểm tra tab ChuaGhep hoặc nạp định mức trong Tác vụ nhập liệu.'}/>
+        calc.ready && (mode !== 'issued' || issuedRows.length) && rows.length ? <div className="table-scroll"><table><thead><tr><th>MÃ VẬT TƯ / TÊN</th><th>ĐVT</th><th className="numeric">SỐ CHỈ LỆNH</th><th className="numeric">TỒN THEO ĐỊNH MỨC</th>{comparison && <><th className="numeric">THỰC ĐẾM</th><th className="numeric">CHÊNH LỆCH</th><th>ĐỐI CHIẾU</th></>}<th>CHI TIẾT</th></tr></thead><tbody>{rows.map(r=><tr key={`${r.materialCode}|${r.unit}`}><td><strong>{r.materialCode}</strong>{r.materialCodes?.length > 1 && <span className="pill-badge" style={{marginLeft:6,fontSize:11,padding:'1px 6px',borderRadius:999,background:'var(--accent-soft, #e0f2fe)',color:'var(--accent, #0369a1)'}}>Gộp {r.materialCodes.length} mã</span>}<small>{r.materialName}</small></td><td>{r.unit}</td><td className="numeric">{money(r.orderCount)}</td><td className="numeric strong-cell">{r.quantity == null ? '—' : money(r.quantity,3)}</td>{comparison && <><td className="numeric">{r.actual == null ? '—' : money(r.actual,3)}</td><td className={`numeric ${(r.variance || 0) < 0 ? 'text-danger' : (r.variance || 0) > 0 ? 'text-warning' : ''}`}>{r.variance == null ? '—' : money(r.variance,3)}</td><td>{r.comparison}</td></>}<td>{r.details.length ? <button className="text-button" onClick={()=>setSelected(r)}>Theo đơn →</button> : '—'}</td></tr>)}</tbody></table></div> : <EmptyInline text={calc.hasSource ? 'Chưa có dòng kết quả phù hợp. Kiểm tra cơ sở, tiến độ, định mức và dòng cần rà soát.' : 'Chưa có nguồn định mức cho kho này. Kiểm tra tab ChuaGhep hoặc nạp định mức trong Tác vụ nhập liệu.'}/>
       ) : (
         unmappedRows.length ? <div className="table-scroll"><table><thead><tr><th>CHỈ LỆNH</th><th>MÃ HÀNG</th><th>MÀU</th><th>MÃ VẬT TƯ</th><th>LÝ DO CẦN RÀ SOÁT</th></tr></thead><tbody>{unmappedRows.slice(0, 500).map((r, i) => <tr key={i}><td><strong>{r.productionOrder || r.orderNo || '—'}</strong></td><td>{r.model || '—'}</td><td>{r.color || '—'}</td><td>{r.materialCode || '—'}</td><td>{r.reason || '—'}</td></tr>)}</tbody></table>{unmappedRows.length > 500 && <div className="table-footnote"><span>Đang hiển thị 500 / {money(unmappedRows.length)} dòng. Xuất Excel để xem toàn bộ.</span></div>}</div> : <EmptyInline text="Không có dòng nào cần rà soát cho kho này." />
       )}

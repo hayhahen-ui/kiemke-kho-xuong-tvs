@@ -150,10 +150,10 @@ export async function createIssuedTemplate() {
 export async function createSnapshotWorkbook(result, metadata) {
   const { default: ExcelJS }=await import('exceljs'); const wb=new ExcelJS.Workbook();
   const info=wb.addWorksheet('ThongTin');
-  for (const row of [['Mốc kiểm kê',metadata.asOf],['Kho',metadata.warehouse],['Công đoạn',result.stage],['Cơ sở',metadata.modeLabel],['Múi giờ thiết bị',metadata.timeZone || ''],['File tiến độ',metadata.progressSource || ''],['File định mức',metadata.normSource || ''],['File số đôi đã lĩnh',metadata.issuedSource || ''],['File kiểm đếm',metadata.countSource || ''],['Ghi chú','Tính theo dữ liệu đã nạp hiện tại, không tự dựng lại dữ liệu quá khứ. Số dở dang theo định mức; không phải tồn sổ.'],['Cảnh báo','Kiểm tra ChuaGhep; kết quả có thể chưa đầy đủ.']]) info.addRow(row); info.columns=[{width:25},{width:85}];
+  for (const row of [['Mốc kiểm kê',metadata.asOf],['Kho',metadata.warehouse],['Công đoạn',result.stage],['Cơ sở',metadata.modeLabel],['Cách gộp',metadata.groupByName ? 'Gộp theo tên vật tư (ghép chung mã)' : 'Tách theo mã vật tư'],['Múi giờ thiết bị',metadata.timeZone || ''],['File tiến độ',metadata.progressSource || ''],['File định mức',metadata.normSource || ''],['File số đôi đã lĩnh',metadata.issuedSource || ''],['File kiểm đếm',metadata.countSource || ''],['Ghi chú','Tính theo dữ liệu đã nạp hiện tại, không tự dựng lại dữ liệu quá khứ. Số dở dang theo định mức; không phải tồn sổ.'],['Cảnh báo','Kiểm tra ChuaGhep; kết quả có thể chưa đầy đủ.']]) info.addRow(row); info.columns=[{width:25},{width:85}];
   const sum=wb.addWorksheet('TongHop'); sum.addRow(['Mã vật tư','Tên vật tư','Đơn vị','Số chỉ lệnh','Tồn lý thuyết theo dở dang']);
   if (metadata.comparison) { sum.getRow(1).getCell(6).value='Kiểm đếm thực tế'; sum.getRow(1).getCell(7).value='Chênh lệch tạm tính'; sum.getRow(1).getCell(8).value='Ghi chú'; }
-  (metadata.comparison || result.summary).forEach(r=>sum.addRow([r.materialCode,r.materialName,r.unit,r.orderCount,r.quantity, ...(metadata.comparison ? [r.actual,r.variance,r.comparison] : [])]));
+  (metadata.comparison || metadata.summaryRows || result.summary).forEach(r=>sum.addRow([r.materialCode,r.materialName,r.unit,r.orderCount,r.quantity, ...(metadata.comparison ? [r.actual,r.variance,r.comparison] : [])]));
   const detail=wb.addWorksheet('TheoDon'); detail.addRow(['Chỉ lệnh','PO','Mã hàng','Màu','Công đoạn','Số đôi cơ sở','Đã qua công đoạn','Còn lại','Mã vật tư','Tên vật tư','ĐVT','Định mức/đôi','Tồn lý thuyết','Nguồn','Dòng nguồn']);
   result.rows.forEach(r=>detail.addRow([r.orderNo,r.purchaseOrder,r.model,r.color,r.stage,r.qty,r.done,r.basisQty,r.materialCode,r.materialName,r.unit,r.rate,r.quantity,r.source,r.sourceRow]));
   const gaps=wb.addWorksheet('ChuaGhep'); gaps.addRow(['Chỉ lệnh','Mã hàng','Màu','Mã vật tư','Lý do']); result.unmapped.forEach(r=>gaps.addRow([r.productionOrder || r.orderNo || '',r.model || '',r.color || '',r.materialCode || '',r.reason || '']));
@@ -179,6 +179,71 @@ export function compareSnapshotCounts(result, countRows, warehouseId) {
     rows.push({materialCode:c.materialCode,materialName:c.materialName,unit:c.unit,quantity:complete ? 0 : null,actual:c.quantity,variance:complete ? c.quantity : null,orderCount:0,details:[],comparison:complete ? 'Ngoài BOM đơn dở dang' : 'Ngoài kết quả đã ghép — cần rà soát'});
   }
   return rows;
+}
+
+const SUBSCRIPT_DIGITS = { '₀':'0','₁':'1','₂':'2','₃':'3','₄':'4','₅':'5','₆':'6','₇':'7','₈':'8','₉':'9' };
+
+/**
+ * Normalize a material name for cross-code grouping (strips accents, brackets,
+ * brand suffixes like ADIDAS, subscript digits, and generic chemical prefixes).
+ */
+export function normalizeMaterialNameKey(name) {
+  let text = String(name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D');
+  text = text.replace(/[₀-₉]/g, (c) => SUBSCRIPT_DIGITS[c]).toUpperCase();
+  text = text.replace(/\bADIDAS\b/g, ' ').replace(/[\[\]\(\),;._\-\/]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const words = text.split(' ').filter((w, i, arr) => w && (i === 0 || w !== arr[i - 1]));
+  let compactName = words.join('');
+  compactName = compactName
+    .replace(/^CHATTROXUCTIENVALAMMEM/, 'CHATXUCTIEN')
+    .replace(/^CHATTROPHANTAN/, 'CHATPHANTAN')
+    .replace(/^CHATTRO/, 'CHAT');
+  return compactName;
+}
+
+/**
+ * Merge inventory summary/comparison rows by normalized material name + unit,
+ * combining all matched material codes onto a single row ("code1 / code2").
+ */
+export function mergeRowsByMaterialName(rows) {
+  const groups = new Map();
+  for (const row of rows || []) {
+    const nameKey = normalizeMaterialNameKey(row.materialName) || norm(row.materialCode);
+    const groupKey = `${nameKey}|${norm(row.unit)}`;
+    if (!groups.has(groupKey)) groups.set(groupKey, []);
+    groups.get(groupKey).push(row);
+  }
+  const merged = [];
+  for (const list of groups.values()) {
+    const codes = [...new Set(list.map((r) => String(r.materialCode || '').trim()).filter(Boolean))];
+    const preferredName = (list.find((r) => !/\bADIDAS\b/i.test(String(r.materialName || ''))) || list[0]).materialName;
+    const hasQty = list.some((r) => r.quantity !== null && r.quantity !== undefined);
+    const quantity = hasQty ? list.reduce((sum, r) => sum + (r.quantity ?? 0), 0) : null;
+    const hasActual = list.some((r) => r.actual !== null && r.actual !== undefined);
+    const actual = hasActual ? list.reduce((sum, r) => sum + (r.actual ?? 0), 0) : null;
+    const variance = hasQty && hasActual ? actual - quantity : null;
+    const details = list.flatMap((r) => r.details || []);
+    const orderIds = new Set(details.map((d) => d.orderNo).filter(Boolean));
+    const orderCount = orderIds.size || list.reduce((max, r) => Math.max(max, Number(r.orderCount) || 0), 0);
+    let comparison;
+    if (actual === null) comparison = 'Chưa đếm';
+    else if (quantity === null) comparison = 'Ngoài kết quả đã ghép — cần rà soát';
+    else if (list.some((r) => String(r.comparison || '').includes('Tạm tính'))) comparison = 'Tạm tính — còn dòng chưa ghép';
+    else if (list.every((r) => String(r.comparison || '').includes('Ngoài BOM')) && quantity === 0) comparison = 'Ngoài BOM đơn dở dang';
+    else comparison = 'Đã đối chiếu';
+    merged.push({
+      ...list[0],
+      materialCode: codes.join(' / '),
+      materialCodes: codes,
+      materialName: preferredName,
+      quantity,
+      actual,
+      variance,
+      orderCount,
+      details,
+      comparison,
+    });
+  }
+  return merged;
 }
 export async function readCountWorkbook(file) {
   const { default: ExcelJS }=await import('exceljs'); const wb=new ExcelJS.Workbook(); await wb.xlsx.load(await file.arrayBuffer());

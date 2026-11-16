@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
-import { calculateInventorySnapshot, readIssuedWorkbook, createSnapshotWorkbook } from './inventory-snapshot.js';
+import { calculateInventorySnapshot, readIssuedWorkbook, createSnapshotWorkbook, normalizeMaterialNameKey, mergeRowsByMaterialName } from './inventory-snapshot.js';
 const orders=[
   {orderNo:'ĐH09',model:'C',color:'1',plannedQty:600,productionQty:600,stageQuantities:{LAF_CUT:300,LVF_SEW:300,LVF_GO:100}},
   {orderNo:'ĐH10',model:'A',color:'2',plannedQty:600,productionQty:600,stageQuantities:{LAF_CUT:100,LVF_SEW:100,LVF_GO:0}},
@@ -136,4 +136,26 @@ test('factory LVF combined view only sums BOM lines allocated to their stage',()
  assert.equal(r.summary.find(x=>x.materialCode==='GO').quantity,500);
  assert.equal(r.summary.some(x=>x.materialCode==='UNKNOWN'),false);
  assert.ok(r.unmapped.some(x=>x.materialCode==='UNKNOWN' && x.reason.includes('công đoạn')));
+});
+test('normalizeMaterialNameKey matches equivalent ADIDAS and standard names without false collisions',()=>{
+ assert.equal(normalizeMaterialNameKey('CAO SU3L'), normalizeMaterialNameKey('Cao su [3L]  ADIDAS'));
+ assert.equal(normalizeMaterialNameKey('CAO SUSBR-1502'), normalizeMaterialNameKey('Cao su [SBR-1502] ADIDAS'));
+ assert.equal(normalizeMaterialNameKey('CHẤT TRỢ XÚC TIẾN VÀ LÀM MỀM B75 NS'), normalizeMaterialNameKey('CHẤT XÚC TIẾN B75 NS ADIDAS'));
+ assert.notEqual(normalizeMaterialNameKey('DẦU TCM LIQUID 1500'), normalizeMaterialNameKey('DẦU TCM LIQUID 220N ADIDAS'));
+});
+test('mergeRowsByMaterialName combines two material codes onto one row and recalculates totals',()=>{
+ const rows=[
+  {materialCode:'003362',materialName:'CAO SU3L',unit:'KÍ',orderCount:2,quantity:5487.827,actual:null,variance:null,comparison:'Chưa đếm',details:[{orderNo:'DH01'},{orderNo:'DH02'}]},
+  {materialCode:'009218',materialName:'Cao su [3L]  ADIDAS',unit:'KÍ',orderCount:1,quantity:0,actual:3010,variance:3010,comparison:'Đã đối chiếu',details:[{orderNo:'DH02'}]},
+ ];
+ const merged=mergeRowsByMaterialName(rows);
+ assert.equal(merged.length,1);
+ assert.equal(merged[0].materialCode,'003362 / 009218');
+ assert.deepEqual(merged[0].materialCodes,['003362','009218']);
+ assert.equal(merged[0].materialName,'CAO SU3L');
+ assert.equal(merged[0].quantity,5487.827);
+ assert.equal(merged[0].actual,3010);
+ assert.ok(Math.abs(merged[0].variance - (3010 - 5487.827)) < 1e-6);
+ assert.equal(merged[0].orderCount,2);
+ assert.equal(merged[0].comparison,'Đã đối chiếu');
 });
