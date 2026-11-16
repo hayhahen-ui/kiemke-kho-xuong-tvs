@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { importTaskWorkbook } from '../src/lib/task-workbooks.js';
-import { readWorkshopCounts } from '../src/lib/inventory-snapshot.js';
+import { readWorkshopCounts, readMaterialIssueWorkbook } from '../src/lib/inventory-snapshot.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -24,6 +24,7 @@ async function main() {
   const hmPath = path.join(realDataDir, 'DM-MATHANG-HOAMAU LAF-CANLUYEN.xlsx');
   const wbPath = path.join(realDataDir, 'Mau_01_Thong_Ke_Xuong_Doi_Chieu_Kiem_Ke-v4_tu_dong_phan_bo_theo_nha_may_da_sua_loi.xlsx');
   const dhPath = path.join(realDataDir, 'DON HANG.xlsx');
+  const poIssuePath = path.join(realDataDir, 'chi tiet vat tu thuc xuat theo so po.xlsx');
 
   const td = await importTaskWorkbook('production-orders', fileFromDisk(tdPath, 'TIEN-DO-SX-DONHANG.xlsx'));
   const hm = await importTaskWorkbook('chemical-norms:HOA_MAU_LAF', fileFromDisk(hmPath, 'DM-MATHANG-HOAMAU LAF-CANLUYEN.xlsx'));
@@ -33,6 +34,7 @@ async function main() {
   const invLvf = await importTaskWorkbook('inventory:LVF', fileFromDisk(wbPath, 'Mau_01_Thong_Ke_Xuong_Doi_Chieu_Kiem_Ke.xlsx'));
   const dh = await importTaskWorkbook('orders', fileFromDisk(dhPath, 'DON HANG.xlsx'));
   const counts = await readWorkshopCounts(fileFromDisk(wbPath, 'Mau_01_Thong_Ke_Xuong_Doi_Chieu_Kiem_Ke.xlsx'));
+  const poIssues = fs.existsSync(poIssuePath) ? await readMaterialIssueWorkbook(fileFromDisk(poIssuePath, 'chi tiet vat tu thuc xuat theo so po.xlsx')) : { rows: [] };
 
   const nowIso = '2026-11-16T04:00:00.000Z';
   const prodBatchId = 'real-prod-v1';
@@ -82,6 +84,7 @@ async function main() {
       ...invLvf.inventory,
     },
     workshopCounts: counts,
+    materialIssues: poIssues.rows,
     importMeta: {
       'production-orders': {
         taskId: 'production-orders',

@@ -153,8 +153,8 @@ export async function createSnapshotWorkbook(result, metadata) {
   const info=wb.addWorksheet('ThongTin');
   for (const row of [['Mốc kiểm kê',metadata.asOf],['Kho',metadata.warehouse],['Công đoạn',result.stage],['Cơ sở',metadata.modeLabel],['Cách gộp',metadata.groupByName ? 'Gộp theo tên vật tư (ghép chung mã)' : 'Tách theo mã vật tư'],['Múi giờ thiết bị',metadata.timeZone || ''],['File tiến độ',metadata.progressSource || ''],['File định mức',metadata.normSource || ''],['File số đôi đã lĩnh',metadata.issuedSource || ''],['File kiểm đếm',metadata.countSource || ''],['Ghi chú','Tính theo dữ liệu đã nạp hiện tại, không tự dựng lại dữ liệu quá khứ. Số dở dang theo định mức; không phải tồn sổ.'],['Cảnh báo','Kiểm tra ChuaGhep; kết quả có thể chưa đầy đủ.']]) info.addRow(row); info.columns=[{width:25},{width:85}];
   const sum=wb.addWorksheet('TongHop'); sum.addRow(['Mã vật tư','Tên vật tư','Đơn vị','Số chỉ lệnh','Tồn lý thuyết theo dở dang']);
-  if (metadata.comparison) { sum.getRow(1).getCell(6).value='Kiểm đếm thực tế'; sum.getRow(1).getCell(7).value='Chênh lệch tạm tính'; sum.getRow(1).getCell(8).value='Ghi chú'; }
-  (metadata.comparison || metadata.summaryRows || result.summary).forEach(r=>sum.addRow([r.materialCode,r.materialName,r.unit,r.orderCount,r.quantity, ...(metadata.comparison ? [r.actual,r.variance,r.comparison] : [])]));
+  if (metadata.comparison) { sum.getRow(1).getCell(6).value='Đã lãnh kho tổng'; sum.getRow(1).getCell(7).value='Kiểm đếm thực tế'; sum.getRow(1).getCell(8).value='Chênh lệch tạm tính'; sum.getRow(1).getCell(9).value='Ghi chú'; }
+  (metadata.comparison || metadata.summaryRows || result.summary).forEach(r=>sum.addRow([r.materialCode,r.materialName,r.unit,r.orderCount,r.quantity, ...(metadata.comparison ? [r.issuedFromMain,r.actual,r.variance,r.comparison] : [])]));
   const detail=wb.addWorksheet('TheoDon'); detail.addRow(['Chỉ lệnh','PO','Mã hàng','Màu','Công đoạn','Số đôi cơ sở','Đã qua công đoạn','Còn lại','Mã vật tư','Tên vật tư','ĐVT','Định mức/đôi','Tồn lý thuyết','Nguồn','Dòng nguồn']);
   result.rows.forEach(r=>detail.addRow([r.orderNo,r.purchaseOrder,r.model,r.color,r.stage,r.qty,r.done,r.basisQty,r.materialCode,r.materialName,r.unit,r.rate,r.quantity,r.source,r.sourceRow]));
   const gaps=wb.addWorksheet('ChuaGhep'); gaps.addRow(['Chỉ lệnh','Mã hàng','Màu','Mã vật tư','Lý do']); result.unmapped.forEach(r=>gaps.addRow([r.productionOrder || r.orderNo || '',r.model || '',r.color || '',r.materialCode || '',r.reason || '']));
@@ -162,22 +162,69 @@ export async function createSnapshotWorkbook(result, metadata) {
   return wb.xlsx.writeBuffer();
 }
 
+const canonicalCode = (v) => (/^\d+$/.test(String(v).trim()) ? String(v).trim().replace(/^0+(?=\d)/, '') : norm(v));
+
+export function summarizeWarehouseIssued(materialIssues, result, warehouseId, { lvfStage = '' } = {}) {
+  const activePOs = new Set((result?.rows || []).map((r) => norm(r.purchaseOrder)).filter(Boolean));
+  const byKey = new Map();
+  const byCanon = new Map();
+  for (const row of materialIssues || []) {
+    if (row.warehouseId !== warehouseId) continue;
+    if ((warehouseId === 'LVF' || warehouseId === 'HOA_MAU_LVF') && (lvfStage === 'may' || lvfStage === 'go')) {
+      const st = norm(row.stage || '');
+      if (st && ((lvfStage === 'may' && !st.includes('MAY')) || (lvfStage === 'go' && !/\bGO\b/.test(st)))) continue;
+    }
+    if (activePOs.size > 0 && row.po && !activePOs.has(norm(row.po))) continue;
+    const qty = Number(row.issuedQty);
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+    const k = [row.materialCode, row.unit].map(norm).join('|');
+    const existing = byKey.get(k) || { materialCode: row.materialCode, materialName: row.materialName, unit: row.unit, issuedFromMain: 0 };
+    existing.issuedFromMain += qty;
+    byKey.set(k, existing);
+    const ck = `${canonicalCode(row.materialCode)}|${norm(row.unit)}`;
+    if (!byCanon.has(ck)) byCanon.set(ck, k);
+  }
+  return { byKey, byCanon };
+}
+
 // Counts are optional; keep null distinct from a real zero. Extra materials are
 // not claimed as surplus when the theoretical side has gaps or no source.
-export function compareSnapshotCounts(result, countRows, warehouseId) {
+export function compareSnapshotCounts(result, countRows, warehouseId, { materialIssues = [], lvfStage = '' } = {}) {
   const byKey = new Map();
   for (const c of countRows.filter(x=>x.warehouseId===warehouseId)) byKey.set([c.materialCode,c.unit].map(norm).join('|'),c);
-  const canonicalCode = v => /^\d+$/.test(String(v).trim()) ? String(v).trim().replace(/^0+(?=\d)/,'') : norm(v);
+  const hasIssueData = Array.isArray(materialIssues) && materialIssues.length > 0;
+  const { byKey: issuedMap, byCanon: issuedCanon } = hasIssueData
+    ? summarizeWarehouseIssued(materialIssues, result, warehouseId, { lvfStage })
+    : { byKey: new Map(), byCanon: new Map() };
+  const takeIssued = (materialCode, unit) => {
+    if (!hasIssueData) return null;
+    const k = [materialCode, unit].map(norm).join('|');
+    let hit = issuedMap.get(k);
+    if (!hit) {
+      const ck = `${canonicalCode(materialCode)}|${norm(unit)}`;
+      const mappedKey = issuedCanon.get(ck);
+      if (mappedKey) { hit = issuedMap.get(mappedKey); issuedMap.delete(mappedKey); }
+    } else {
+      issuedMap.delete(k);
+    }
+    return hit ? hit.issuedFromMain : 0;
+  };
   const rows=result.summary.map(r=>{
     const k=[r.materialCode,r.unit].map(norm).join('|'); let c=byKey.get(k), matchedKey=k;
     if (!c) { const candidates=[...byKey].filter(([,x])=>canonicalCode(x.materialCode)===canonicalCode(r.materialCode) && norm(x.unit)===norm(r.unit)); const theoretical=result.summary.filter(x=>canonicalCode(x.materialCode)===canonicalCode(r.materialCode) && norm(x.unit)===norm(r.unit)); if(candidates.length===1 && theoretical.length===1) [matchedKey,c]=candidates[0]; }
     if (c) byKey.delete(matchedKey);
     const actual=c ? c.quantity : null;
-    return {...r,actual,variance:actual===null ? null : actual-r.quantity, comparison:actual===null ? 'Chưa đếm' : result.unmapped.length ? 'Tạm tính — còn dòng chưa ghép' : 'Đã đối chiếu'};
+    const issuedFromMain = takeIssued(r.materialCode, r.unit);
+    return {...r,issuedFromMain,actual,variance:actual===null ? null : actual-r.quantity, comparison:actual===null ? 'Chưa đếm' : result.unmapped.length ? 'Tạm tính — còn dòng chưa ghép' : 'Đã đối chiếu'};
   });
   for (const c of byKey.values()) {
     const complete=result.hasSource && result.orderCount > 0 && !result.unmapped.length;
-    rows.push({materialCode:c.materialCode,materialName:c.materialName,unit:c.unit,quantity:complete ? 0 : null,actual:c.quantity,variance:complete ? c.quantity : null,orderCount:0,details:[],comparison:complete ? 'Ngoài BOM đơn dở dang' : 'Ngoài kết quả đã ghép — cần rà soát'});
+    const issuedFromMain = takeIssued(c.materialCode, c.unit);
+    rows.push({materialCode:c.materialCode,materialName:c.materialName,unit:c.unit,quantity:complete ? 0 : null,issuedFromMain,actual:c.quantity,variance:complete ? c.quantity : null,orderCount:0,details:[],comparison:complete ? 'Ngoài BOM đơn dở dang' : 'Ngoài kết quả đã ghép — cần rà soát'});
+  }
+  for (const iss of issuedMap.values()) {
+    const complete=result.hasSource && result.orderCount > 0 && !result.unmapped.length;
+    rows.push({materialCode:iss.materialCode,materialName:iss.materialName,unit:iss.unit,quantity:complete ? 0 : null,issuedFromMain:iss.issuedFromMain,actual:null,variance:null,orderCount:0,details:[],comparison:'Đã lãnh kho tổng — chưa đếm'});
   }
   return rows;
 }
@@ -238,6 +285,8 @@ export function mergeRowsByMaterialName(rows) {
     const preferredName = (list.find((r) => !/\bADIDAS\b/i.test(String(r.materialName || ''))) || list[0]).materialName;
     const hasQty = list.some((r) => r.quantity !== null && r.quantity !== undefined);
     const quantity = hasQty ? list.reduce((sum, r) => sum + (r.quantity ?? 0), 0) : null;
+    const hasIssued = list.some((r) => r.issuedFromMain !== null && r.issuedFromMain !== undefined);
+    const issuedFromMain = hasIssued ? list.reduce((sum, r) => sum + (r.issuedFromMain ?? 0), 0) : null;
     const hasActual = list.some((r) => r.actual !== null && r.actual !== undefined);
     const actual = hasActual ? list.reduce((sum, r) => sum + (r.actual ?? 0), 0) : null;
     const variance = hasQty && hasActual ? actual - quantity : null;
@@ -245,7 +294,7 @@ export function mergeRowsByMaterialName(rows) {
     const orderIds = new Set(details.map((d) => d.orderNo).filter(Boolean));
     const orderCount = orderIds.size || list.reduce((max, r) => Math.max(max, Number(r.orderCount) || 0), 0);
     let comparison;
-    if (actual === null) comparison = 'Chưa đếm';
+    if (actual === null) comparison = hasIssued && issuedFromMain > 0 && quantity === 0 ? 'Đã lãnh kho tổng — chưa đếm' : 'Chưa đếm';
     else if (quantity === null) comparison = 'Ngoài kết quả đã ghép — cần rà soát';
     else if (list.some((r) => String(r.comparison || '').includes('Tạm tính'))) comparison = 'Tạm tính — còn dòng chưa ghép';
     else if (list.every((r) => String(r.comparison || '').includes('Ngoài BOM')) && quantity === 0) comparison = 'Ngoài BOM đơn dở dang';
@@ -256,6 +305,7 @@ export function mergeRowsByMaterialName(rows) {
       materialCodes: codes,
       materialName: preferredName,
       quantity,
+      issuedFromMain,
       actual,
       variance,
       orderCount,
@@ -322,4 +372,156 @@ export async function readWorkshopCounts(file) {
   const rows=[...grouped.values()];
   if (!rows.length) throw new Error('Workbook không có dòng kiểm đếm hợp lệ; xem sheet Bảng B cột M.');
   return {rows,warnings,dates};
+}
+
+function colLettersToIndex(letters) {
+  let col = 0;
+  for (let i = 0; i < letters.length; i += 1) {
+    col = col * 26 + (letters.charCodeAt(i) - 64);
+  }
+  return col;
+}
+
+function decodeXmlEntities(str) {
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function classifyIssueWarehouse(dept, group) {
+  const d = compact(dept);
+  const g = compact(group);
+  const isChem = g.includes('HOACHAT');
+  if (d.includes('LAF')) return isChem ? 'HOA_MAU_LAF' : 'LAF';
+  if (d.includes('LVF')) return isChem ? 'HOA_MAU_LVF' : 'LVF';
+  if (d === 'HOAMAU' && isChem) return 'HOA_MAU_LAF';
+  return '';
+}
+
+/**
+ * Parse ERP/warehouse material issue export (e.g. chi tiet vat tu thuc xuat theo so po.xlsx).
+ * Uses JSZip directly so .xlsx files with non-standard namespace prefixes (e.g. d3p1:id)
+ * parse reliably in both browser and Node.
+ */
+export async function readMaterialIssueWorkbook(source) {
+  const { default: JSZip } = await import('jszip');
+  const buf = typeof source?.arrayBuffer === 'function' ? await source.arrayBuffer() : source;
+  const zip = await JSZip.loadAsync(buf);
+
+  const strings = [];
+  const ssFile = zip.file('xl/sharedStrings.xml');
+  if (ssFile) {
+    const ssXml = await ssFile.async('string');
+    const siRe = /<si\b[^>]*>([\s\S]*?)<\/si>/g;
+    const tRe = /<t\b[^>]*>([\s\S]*?)<\/t>/g;
+    let m;
+    while ((m = siRe.exec(ssXml)) !== null) {
+      let s = '';
+      let tm;
+      tRe.lastIndex = 0;
+      while ((tm = tRe.exec(m[1])) !== null) s += tm[1];
+      strings.push(decodeXmlEntities(s));
+    }
+  }
+
+  const sheetPaths = Object.keys(zip.files)
+    .filter((p) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(p))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  if (!sheetPaths.length) throw new Error('Không tìm thấy sheet dữ liệu trong file thực xuất kho tổng.');
+
+  const sheetXml = await zip.file(sheetPaths[0]).async('string');
+  const rowRe = /<row\b[^>]*>([\s\S]*?)<\/row>/g;
+  const cellRe = /<c\b([^>]*)(?:\/>|>([\s\S]*?)<\/c>)/g;
+  const vRe = /<v\b[^>]*>([\s\S]*?)<\/v>/;
+  const tInlineRe = /<t\b[^>]*>([\s\S]*?)<\/t>/g;
+
+  const parseRow = (rowInner) => {
+    const cells = {};
+    let cm;
+    cellRe.lastIndex = 0;
+    while ((cm = cellRe.exec(rowInner)) !== null) {
+      const attrs = cm[1];
+      const body = cm[2] || '';
+      const refM = /\br="([A-Z]+)\d+"/i.exec(attrs);
+      if (!refM) continue;
+      const col = colLettersToIndex(refM[1].toUpperCase());
+      const typeM = /\bt="([^"]+)"/i.exec(attrs);
+      const cellType = typeM ? typeM[1] : '';
+      let val = '';
+      if (cellType === 'inlineStr') {
+        let tm;
+        tInlineRe.lastIndex = 0;
+        while ((tm = tInlineRe.exec(body)) !== null) val += tm[1];
+        val = decodeXmlEntities(val);
+      } else {
+        const vm = vRe.exec(body);
+        if (vm) {
+          val = cellType === 's' ? (strings[Number(vm[1])] ?? '') : decodeXmlEntities(vm[1]);
+        }
+      }
+      cells[col] = String(val).trim();
+    }
+    return cells;
+  };
+
+  let headerCols = null;
+  let rowMatch;
+  let rowIndex = 0;
+  const grouped = new Map();
+  let totalRows = 0;
+
+  while ((rowMatch = rowRe.exec(sheetXml)) !== null) {
+    rowIndex += 1;
+    const cells = parseRow(rowMatch[1]);
+    if (!headerCols) {
+      const map = {};
+      for (const [c, v] of Object.entries(cells)) map[compact(v)] = Number(c);
+      if (map.MAVATTU && (map.SOLUONGXUATKHO || map.THUCLANH || map.DALANH)) {
+        headerCols = {
+          dept: map.DONVIYEUCAU || 10,
+          stage: map.CONGDOANSANXUAT || 11,
+          cmd: map.SOCHILENH || 14,
+          po: map.SOPO || 16,
+          group: map.NHOMLON || 21,
+          code: map.MAVATTU,
+          name: map.TENVATTU || 25,
+          unit: map.DONVI || 30,
+          issuedQty: map.SOLUONGXUATKHO || map.THUCLANH || map.DALANH,
+        };
+      } else if (rowIndex > 10) {
+        break;
+      }
+      continue;
+    }
+
+    const materialCode = cells[headerCols.code] || '';
+    const rawQty = cells[headerCols.issuedQty] || '';
+    const issuedQty = Number(String(rawQty).replace(',', '.'));
+    if (!materialCode || !Number.isFinite(issuedQty) || issuedQty <= 0) continue;
+
+    const dept = cells[headerCols.dept] || '';
+    const group = cells[headerCols.group] || '';
+    const warehouseId = classifyIssueWarehouse(dept, group);
+    if (!warehouseId) continue;
+
+    const po = cells[headerCols.po] || '';
+    const stage = cells[headerCols.stage] || '';
+    const materialName = cells[headerCols.name] || '';
+    const unit = cells[headerCols.unit] || '';
+    totalRows += 1;
+
+    const k = [warehouseId, po, stage, materialCode, unit].map(norm).join('|');
+    if (!grouped.has(k)) {
+      grouped.set(k, { warehouseId, po, stage, materialCode, materialName, unit, issuedQty: 0 });
+    }
+    grouped.get(k).issuedQty += issuedQty;
+  }
+
+  if (!headerCols) throw new Error('Không thấy cột Mã vật tư và Số lượng xuất kho trong file thực xuất kho tổng.');
+  const rows = [...grouped.values()];
+  if (!rows.length) throw new Error('File thực xuất kho tổng không có dòng xuất kho hợp lệ (> 0) cho 4 kho LAF/LVF.');
+  return { rows, totalRows };
 }

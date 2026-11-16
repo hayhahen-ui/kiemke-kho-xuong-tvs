@@ -10,10 +10,10 @@ import { createTaskWorkbook, importTaskWorkbook, taskFilename } from './lib/task
 import { loadLocalState, saveLocalState } from './lib/local-db.js';
 import { supabase, cloudMode } from './lib/supabase.js';
 import { ensureWorkspace, loadWorkspaceRecords, saveWorkspaceRecords } from './lib/cloud.js';
-import { calculateInventorySnapshot, readIssuedWorkbook, createIssuedTemplate, createSnapshotWorkbook, readCountWorkbook, readWorkshopCounts, createCountTemplate, compareSnapshotCounts, mergeRowsByMaterialName } from './lib/inventory-snapshot.js';
+import { calculateInventorySnapshot, readIssuedWorkbook, createIssuedTemplate, createSnapshotWorkbook, readCountWorkbook, readWorkshopCounts, createCountTemplate, compareSnapshotCounts, mergeRowsByMaterialName, readMaterialIssueWorkbook } from './lib/inventory-snapshot.js';
 import { fetchRealDataBundle } from './lib/real-data.js';
 
-const emptyData = () => ({ materials: [], bom: [], orders: [], productionOrders: [], productMappings: [], orderMappings: [], chemicalNorms: [], importMeta: {}, inventory: {}, norms: [], workshopCounts: null });
+const emptyData = () => ({ materials: [], bom: [], orders: [], productionOrders: [], productMappings: [], orderMappings: [], chemicalNorms: [], importMeta: {}, inventory: {}, norms: [], workshopCounts: null, materialIssues: [] });
 const navItems = [
   { id: 'overview', label: 'Tổng quan', icon: Gauge },
   { id: 'snapshot', label: 'Tồn theo đơn dở dang', icon: ClipboardCheck },
@@ -94,6 +94,17 @@ function App() {
         if (!alive) return;
         const hasAnyData = (saved.productionOrders?.length || 0) > 0 || (saved.materials?.length || 0) > 0;
         if (hasAnyData) {
+          if (!(saved.materialIssues?.length)) {
+            try {
+              const bundled = await fetchRealDataBundle();
+              if (alive && bundled.materialIssues?.length) {
+                const updated = { ...saved, materialIssues: bundled.materialIssues };
+                await saveLocalState(updated);
+                setData(updated);
+                return;
+              }
+            } catch {}
+          }
           setData(saved);
           return;
         }
@@ -437,6 +448,21 @@ function App() {
     setData(next);
   };
 
+  const saveMaterialIssues = async (materialIssues, sourceName) => {
+    const next = {
+      ...data,
+      materialIssues,
+      importMeta: {
+        ...data.importMeta,
+        'material-issues': { taskId: 'material-issues', sourceFile: sourceName, importedAt: new Date().toISOString(), rowCount: materialIssues.length },
+      },
+    };
+    if (!cloudMode) {
+      await saveLocalState(next);
+    }
+    setData(next);
+  };
+
   const signOut = async () => { if (supabase) await supabase.auth.signOut(); };
 
   if (!cloudMode && localLoading) return <LoadingScreen label="Đang tải dữ liệu kho xưởng" />;
@@ -488,7 +514,7 @@ function App() {
           {page === 'overview' && <Dashboard data={data} setPage={setPageSafe} onOpenWarehouse={openWarehouseSnapshot} />}
           {page === 'guide' && <GuidePage data={data} setPage={setPageSafe} onOpenWarehouse={openWarehouseSnapshot} />}
           {page === 'orders' && <OrdersPage data={data} onAdd={() => setModal('order')} onProgress={updateOrderProgress} />}
-          {page === 'snapshot' && <SnapshotPage data={data} selectedWarehouse={selectedWarehouse} setWarehouse={setSelectedWarehouse} onSaveCounts={saveWorkshopCounts} />}
+          {page === 'snapshot' && <SnapshotPage data={data} selectedWarehouse={selectedWarehouse} setWarehouse={setSelectedWarehouse} onSaveCounts={saveWorkshopCounts} onSaveMaterialIssues={saveMaterialIssues} />}
           {page === 'requirements' && <RequirementsPage data={data} selectedWarehouse={selectedWarehouse} setWarehouse={setSelectedWarehouse} onExport={exportTask} onImport={importTask} busyTask={busyTask} />}
           {page === 'inventory' && <InventoryPage data={data} rows={currentRows} selectedPlant={selectedPlant} setPlant={setSelectedPlant} onUpdate={updateInventory} />}
           {page === 'catalog' && <CatalogPage data={data} tab={catalogTab} setTab={setCatalogTab} onAddMaterial={() => setModal('material')} onAddBom={() => setModal('bom')} />}
@@ -831,7 +857,7 @@ function InventoryPage({ data, rows, selectedPlant, setPlant, onUpdate }) {
   </>;
 }
 
-function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts }) {
+function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts, onSaveMaterialIssues }) {
   const localNow = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
   const [asOf, setAsOf] = useState(localNow);
   const [mode, setMode] = useState('planned');
@@ -849,10 +875,12 @@ function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts }) {
   const countRows = customCounts?.rows || data.workshopCounts?.rows || [];
   const countFile = customCounts?.file || (data.workshopCounts?.rows?.length ? 'Mau_01_Thong_Ke_Xuong_Doi_Chieu_Kiem_Ke.xlsx' : '');
   const countNotes = customCounts?.notes || (data.workshopCounts?.dates ? data.workshopCounts : null);
+  const materialIssues = data.materialIssues || [];
+  const issueFile = data.importMeta?.['material-issues']?.sourceFile || (materialIssues.length ? 'chi tiet vat tu thuc xuat theo so po.xlsx' : '');
 
   const labels = {issued:'Số đôi đã lĩnh theo file', released:'SL phát lệnh (cột T) — giả định đã lĩnh', planned:'SL đơn hàng (cột S) trong TIEN-DO-SX-DONHANG'};
   const calc = useMemo(() => mode === 'issued' && !issuedRows.length ? {ready:false,rows:[],summary:[],unmapped:[],hasSource:false} : calculateInventorySnapshot(data, selectedWarehouse, {mode,lvfStage,issuedRows}), [data,selectedWarehouse,mode,lvfStage,issuedRows]);
-  const comparison = useMemo(() => countRows.length ? compareSnapshotCounts(calc, countRows, selectedWarehouse) : null, [calc,countRows,selectedWarehouse]);
+  const comparison = useMemo(() => (countRows.length || materialIssues.length) ? compareSnapshotCounts(calc, countRows, selectedWarehouse, { materialIssues, lvfStage }) : null, [calc,countRows,selectedWarehouse,materialIssues,lvfStage]);
   const displaySummary = useMemo(() => {
     const base = comparison || calc.summary;
     return groupByName ? mergeRowsByMaterialName(base) : base;
@@ -871,6 +899,24 @@ function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts }) {
   const importIssued = async (file) => { try { const rows=await readIssuedWorkbook(file); setIssuedRows(rows); setIssuedFile(file.name); setError(''); } catch(e) { setIssuedRows([]); setIssuedFile(''); setError(e.message || 'Không đọc được file số đôi đã lĩnh.'); } };
   const importCount = async (file) => { try { const rows=await readCountWorkbook(file); const payload = { rows, warnings: [], dates: null }; setCustomCounts({ rows, file: file.name, notes: null }); if (onSaveCounts) await onSaveCounts(payload); setError(''); } catch(e) { setError(e.message || 'Không đọc được file kiểm đếm.');} };
   const importWorkshopCounts = async (file) => { try { const result=await readWorkshopCounts(file); setCustomCounts({ rows: result.rows, file: file.name, notes: result }); if (onSaveCounts) await onSaveCounts(result); setError(''); } catch(e) { setError(e.message || 'Không đọc được workbook thống kê.');} };
+  const importMaterialIssues = async (file) => { try { const result=await readMaterialIssueWorkbook(file); if (onSaveMaterialIssues) await onSaveMaterialIssues(result.rows, file.name); setError(''); } catch(e) { setError(e.message || 'Không đọc được file thực xuất kho tổng.'); } };
+  const updateManualCount = async (row, rawValue) => {
+    const trimmed = String(rawValue ?? '').trim();
+    const numericVal = trimmed === '' ? null : Number(trimmed.replace(',', '.'));
+    if (numericVal !== null && (!Number.isFinite(numericVal) || numericVal < 0)) return;
+    const codesInRow = row.materialCodes?.length ? row.materialCodes : [row.materialCode];
+    const canon = (v) => (/^\d+$/.test(String(v).trim()) ? String(v).trim().replace(/^0+(?=\d)/, '') : String(v).trim().toUpperCase());
+    const codeSet = new Set(codesInRow.map(canon));
+    const unitNorm = String(row.unit || '').trim().toUpperCase();
+    const filtered = countRows.filter((c) => !(c.warehouseId === selectedWarehouse && codeSet.has(canon(c.materialCode)) && String(c.unit || '').trim().toUpperCase() === unitNorm));
+    if (numericVal !== null) {
+      filtered.push({ warehouseId: selectedWarehouse, materialCode: codesInRow[0], materialName: row.materialName, unit: row.unit, quantity: numericVal });
+    }
+    const baseMeta = data.workshopCounts || { warnings: [], dates: null };
+    const nextPayload = { ...baseMeta, rows: filtered };
+    if (customCounts) setCustomCounts({ ...customCounts, rows: filtered });
+    if (onSaveCounts) await onSaveCounts(nextPayload);
+  };
   const exportResult = async () => { try { const bytes=await createSnapshotWorkbook(calc,{asOf,warehouse:selectedWarehouseInfo?.name,modeLabel:labels[mode],groupByName,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone,progressSource:data.importMeta?.['production-orders']?.sourceFile || '',normSource:data.importMeta?.['chemical-norms:' + selectedWarehouse]?.sourceFile || 'BOM hoặc nguồn chưa ghi tên',issuedSource:issuedFile,countSource:countFile + (countNotes ? ' | ' + Object.values(countNotes.dates).join(' | ') + ' | Lưu ý: mốc đếm có thể khác mốc tiến độ; đối chiếu chỉ tạm tính.' : ''),comparison: comparison ? displaySummary : null,summaryRows: displaySummary}); download(bytes,`Ton_kiem_ke_${selectedWarehouse}.xlsx`); setError(''); } catch(e) {setError(e.message || 'Không xuất được file.');} };
   return <>
     <div className="page-heading"><div><div className="eyebrow">KIỂM KÊ <span>•</span> THEO ĐƠN DỞ DANG 4 KHO</div><h1>Tồn lý thuyết theo định mức</h1><p>Chặt (S − U) → Kho xưởng LAF & Hóa mẫu LAF · May/Gò (S − V/W) → Kho xưởng LVF & Hóa mẫu LVF.</p></div><button className="button button-secondary" disabled={!calc.ready || !asOf || (mode === 'issued' && !issuedRows.length)} onClick={exportResult}><ArrowDownToLine size={16} /> Xuất kết quả Excel</button></div>
@@ -882,10 +928,11 @@ function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts }) {
       {(selectedWarehouse === 'HOA_MAU_LVF' || selectedWarehouse === 'LVF') && <label>Công đoạn LVF<select value={lvfStage} onChange={e=>setLvfStage(e.target.value)}><option value="both">May + Gò — theo cột công đoạn của định mức</option><option value="may">May (cột V)</option><option value="go">Gò (cột W)</option></select></label>}
       {mode === 'issued' && <div><label className="button button-secondary button-small upload-control"><Upload size={14}/> Nhập file số đôi đã lĩnh<input type="file" accept=".xlsx" onChange={e=>{const f=e.target.files?.[0]; if(f)importIssued(f); e.target.value='';}}/></label> <button className="text-button" onClick={async()=>download(await createIssuedTemplate(),'Mau_So_Doi_Da_Linh.xlsx')}>Tải mẫu</button><p>{issuedFile ? `${issuedFile} · ${issuedRows.length} dòng` : 'Chưa nạp file số đôi đã lĩnh.'}</p></div>}
       <div className="field-span" style={{display:'flex',flexWrap:'wrap',gap:10,alignItems:'center'}}>
+        <label className="button button-secondary button-small upload-control"><Upload size={14}/> Import Thực xuất kho tổng (theo PO)<input type="file" accept=".xlsx,.xlsm" onChange={e=>{const f=e.target.files?.[0]; if(f)importMaterialIssues(f); e.target.value='';}}/></label>
         <label className="button button-secondary button-small upload-control"><Upload size={14}/> Nhập kiểm đếm (file mẫu)<input type="file" accept=".xlsx" onChange={e=>{const f=e.target.files?.[0]; if(f)importCount(f); e.target.value='';}}/></label>
         <button className="text-button" onClick={async()=>download(await createCountTemplate(),'Mau_Kiem_Dem.xlsx')}>Tải mẫu</button>
         <label className="button button-secondary button-small upload-control"><Upload size={14}/> Nhập đếm từ workbook thống kê 4 kho<input type="file" accept=".xlsx,.xlsm" onChange={e=>{const f=e.target.files?.[0]; if(f)importWorkshopCounts(f); e.target.value='';}}/></label>
-        <span className="helper-label">{countFile ? `Đang dùng: ${countFile} (${countRows.length} dòng)` : 'Chưa nạp số đếm thực tế.'}</span>
+        <span className="helper-label">{countFile ? `Kiểm đếm: ${countFile} (${countRows.length} dòng)` : 'Chưa nạp số đếm thực tế.'}{issueFile ? ` · Kho tổng: ${issueFile} (${materialIssues.length} dòng)` : ''}</span>
       </div>
     </div></section>
     {countNotes && <div className="mapping-warning"><CircleAlert size={16}/><span><strong>Số đếm theo mốc trong workbook — không mặc định trùng mốc tiến độ:</strong> {Object.entries(countNotes.dates).map(([k,v])=>`${k}: ${v}`).join(' · ')}. {countNotes.warnings.length} dòng kiểm đếm không ghép được hoặc không có kết quả công thức; cần kiểm tra nguồn. Đối chiếu chỉ tạm tính khi mốc không đồng nhất.{countNotes.warnings.length > 0 && <details><summary>Xem các dòng đã bỏ qua</summary><ul>{countNotes.warnings.map((w,i)=><li key={i}>{w}</li>)}</ul></details>}</span></div>}
@@ -921,7 +968,7 @@ function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts }) {
         </div>
       </div>
       {snapshotTab === 'summary' ? (
-        calc.ready && (mode !== 'issued' || issuedRows.length) && rows.length ? <div className="table-scroll"><table><thead><tr><th>MÃ VẬT TƯ / TÊN</th><th>ĐVT</th><th className="numeric">SỐ CHỈ LỆNH</th><th className="numeric">TỒN THEO ĐỊNH MỨC</th>{comparison && <><th className="numeric">THỰC ĐẾM</th><th className="numeric">CHÊNH LỆCH</th><th>ĐỐI CHIẾU</th></>}<th>CHI TIẾT</th></tr></thead><tbody>{rows.map(r=><tr key={`${r.materialCode}|${r.unit}`}><td><strong>{r.materialCode}</strong>{r.materialCodes?.length > 1 && <span className="pill-badge" style={{marginLeft:6,fontSize:11,padding:'1px 6px',borderRadius:999,background:'var(--accent-soft, #e0f2fe)',color:'var(--accent, #0369a1)'}}>Gộp {r.materialCodes.length} mã</span>}<small>{r.materialName}</small></td><td>{r.unit}</td><td className="numeric">{money(r.orderCount)}</td><td className="numeric strong-cell">{r.quantity == null ? '—' : money(r.quantity,3)}</td>{comparison && <><td className="numeric">{r.actual == null ? '—' : money(r.actual,3)}</td><td className={`numeric ${(r.variance || 0) < 0 ? 'text-danger' : (r.variance || 0) > 0 ? 'text-warning' : ''}`}>{r.variance == null ? '—' : money(r.variance,3)}</td><td>{r.comparison}</td></>}<td>{r.details.length ? <button className="text-button" onClick={()=>setSelected(r)}>Theo đơn →</button> : '—'}</td></tr>)}</tbody></table></div> : <EmptyInline text={calc.hasSource ? 'Chưa có dòng kết quả phù hợp. Kiểm tra cơ sở, tiến độ, định mức và dòng cần rà soát.' : 'Chưa có nguồn định mức cho kho này. Kiểm tra tab ChuaGhep hoặc nạp định mức trong Tác vụ nhập liệu.'}/>
+        calc.ready && (mode !== 'issued' || issuedRows.length) && rows.length ? <div className="table-scroll"><table><thead><tr><th>MÃ VẬT TƯ / TÊN</th><th>ĐVT</th><th className="numeric">SỐ CHỈ LỆNH</th><th className="numeric">TỒN THEO ĐỊNH MỨC</th>{comparison && <><th className="numeric">ĐÃ LÃNH KHO TỔNG</th><th className="numeric">THỰC ĐẾM HIỆN TRƯỜNG</th><th className="numeric">CHÊNH LỆCH</th><th>ĐỐI CHIẾU</th></>}<th>CHI TIẾT</th></tr></thead><tbody>{rows.map(r=><tr key={`${r.materialCode}|${r.unit}`}><td><strong>{r.materialCode}</strong>{r.materialCodes?.length > 1 && <span className="pill-badge" style={{marginLeft:6,fontSize:11,padding:'1px 6px',borderRadius:999,background:'var(--accent-soft, #e0f2fe)',color:'var(--accent, #0369a1)'}}>Gộp {r.materialCodes.length} mã</span>}<small>{r.materialName}</small></td><td>{r.unit}</td><td className="numeric">{money(r.orderCount)}</td><td className="numeric strong-cell">{r.quantity == null ? '—' : money(r.quantity,3)}</td>{comparison && <><td className="numeric">{r.issuedFromMain == null ? '—' : money(r.issuedFromMain,3)}</td><td className="numeric"><NumberInput className="cell-input numeric-input count-input" placeholder="Nhập tay" value={r.actual ?? ''} onSave={(val)=>updateManualCount(r,val)} /></td><td className={`numeric ${(r.variance || 0) < 0 ? 'text-danger' : (r.variance || 0) > 0 ? 'text-warning' : ''}`}>{r.variance == null ? '—' : money(r.variance,3)}</td><td>{r.comparison}</td></>}<td>{r.details.length ? <button className="text-button" onClick={()=>setSelected(r)}>Theo đơn →</button> : '—'}</td></tr>)}</tbody></table></div> : <EmptyInline text={calc.hasSource ? 'Chưa có dòng kết quả phù hợp. Kiểm tra cơ sở, tiến độ, định mức và dòng cần rà soát.' : 'Chưa có nguồn định mức cho kho này. Kiểm tra tab ChuaGhep hoặc nạp định mức trong Tác vụ nhập liệu.'}/>
       ) : (
         unmappedRows.length ? <div className="table-scroll"><table><thead><tr><th>CHỈ LỆNH</th><th>MÃ HÀNG</th><th>MÀU</th><th>MÃ VẬT TƯ</th><th>LÝ DO CẦN RÀ SOÁT</th></tr></thead><tbody>{unmappedRows.slice(0, 500).map((r, i) => <tr key={i}><td><strong>{r.productionOrder || r.orderNo || '—'}</strong></td><td>{r.model || '—'}</td><td>{r.color || '—'}</td><td>{r.materialCode || '—'}</td><td>{r.reason || '—'}</td></tr>)}</tbody></table>{unmappedRows.length > 500 && <div className="table-footnote"><span>Đang hiển thị 500 / {money(unmappedRows.length)} dòng. Xuất Excel để xem toàn bộ.</span></div>}</div> : <EmptyInline text="Không có dòng nào cần rà soát cho kho này." />
       )}

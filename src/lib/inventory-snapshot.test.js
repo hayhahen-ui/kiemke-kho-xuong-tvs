@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
-import { calculateInventorySnapshot, readIssuedWorkbook, createSnapshotWorkbook, normalizeMaterialNameKey, mergeRowsByMaterialName } from './inventory-snapshot.js';
+import { calculateInventorySnapshot, readIssuedWorkbook, createSnapshotWorkbook, normalizeMaterialNameKey, mergeRowsByMaterialName, compareSnapshotCounts } from './inventory-snapshot.js';
 const orders=[
   {orderNo:'ĐH09',model:'C',color:'1',plannedQty:600,productionQty:600,stageQuantities:{LAF_CUT:300,LVF_SEW:300,LVF_GO:100}},
   {orderNo:'ĐH10',model:'A',color:'2',plannedQty:600,productionQty:600,stageQuantities:{LAF_CUT:100,LVF_SEW:100,LVF_GO:0}},
@@ -176,4 +176,21 @@ test('downstream Gò, Đóng thùng, Nhập kho propagate backward to missing up
  assert.equal(laf.rows[0].basisQty,7);
  const chemLaf=calculateInventorySnapshot(seqData,'HOA_MAU_LAF',{mode:'planned'});
  assert.equal(chemLaf.summary.length,0);
+});
+test('compareSnapshotCounts and mergeRowsByMaterialName include PO-matched issuedFromMain column',()=>{
+ const res={hasSource:true,orderCount:1,unmapped:[],rows:[{orderNo:'DH1',purchaseOrder:'PO-999',model:'C',color:'1',materialCode:'003362',materialName:'CAO SU3L',unit:'KÍ',quantity:100}],summary:[{materialCode:'003362',materialName:'CAO SU3L',unit:'KÍ',orderCount:1,quantity:100,details:[{orderNo:'DH1'}]}]};
+ const counts=[{warehouseId:'HOA_MAU_LAF',materialCode:'009218',materialName:'Cao su [3L] ADIDAS',unit:'KÍ',quantity:80}];
+ const issues=[
+  {warehouseId:'HOA_MAU_LAF',po:'PO-999',stage:'CÁN VẢI',materialCode:'003362',materialName:'CAO SU3L',unit:'KÍ',issuedQty:50},
+  {warehouseId:'HOA_MAU_LAF',po:'PO-999',stage:'CÁN VẢI',materialCode:'009218',materialName:'Cao su [3L] ADIDAS',unit:'KÍ',issuedQty:40},
+  {warehouseId:'HOA_MAU_LAF',po:'PO-OTHER',stage:'CÁN VẢI',materialCode:'003362',materialName:'CAO SU3L',unit:'KÍ',issuedQty:999},
+ ];
+ const cmp=compareSnapshotCounts(res,counts,'HOA_MAU_LAF',{materialIssues:issues});
+ const merged=mergeRowsByMaterialName(cmp);
+ assert.equal(merged.length,1);
+ assert.equal(merged[0].materialCode,'003362 / 009218');
+ assert.equal(merged[0].quantity,100);
+ assert.equal(merged[0].issuedFromMain,90);
+ assert.equal(merged[0].actual,80);
+ assert.equal(merged[0].variance,-20);
 });

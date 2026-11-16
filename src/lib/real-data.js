@@ -31,6 +31,7 @@ export function unpackRealDataBundle(bundle) {
     inventory: bundle.inventory || {},
     importMeta: bundle.importMeta || {},
     workshopCounts: bundle.workshopCounts || null,
+    materialIssues: bundle.materialIssues || [],
   };
 }
 
