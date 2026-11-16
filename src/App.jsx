@@ -5,12 +5,12 @@ import {
   Gauge, GitBranch, Layers3, LogOut, Menu, Moon, Package, Plus, RefreshCw, Search, Settings2,
   ShieldCheck, Sun, Upload, X,
 } from 'lucide-react';
-import { PLANTS, WAREHOUSES, getInventoryRows, getPlantName, getPlantSummary, getTheoreticalRequirements, getWarehouseName, summarizeTheoreticalRequirements, inventoryKey, mergeWipProgress, money, orderKey, productKey, productMappingKey, resolveOrderCommand, statusTone } from './lib/model.js';
+import { PLANTS, WAREHOUSES, getInventoryRows, getPlantName, getPlantSummary, getTheoreticalRequirements, getWarehouseName, summarizeTheoreticalRequirements, inventoryKey, mergeWipProgress, money, orderKey, productKey, productMappingKey, resolveEffectiveStageQuantities, resolveOrderCommand, statusTone } from './lib/model.js';
 import { createTaskWorkbook, importTaskWorkbook, taskFilename } from './lib/task-workbooks.js';
 import { loadLocalState, saveLocalState } from './lib/local-db.js';
 import { supabase, cloudMode } from './lib/supabase.js';
 import { ensureWorkspace, loadWorkspaceRecords, saveWorkspaceRecords } from './lib/cloud.js';
-import { calculateInventorySnapshot, readIssuedWorkbook, createIssuedTemplate, createSnapshotWorkbook, readCountWorkbook, readWorkshopCounts, createCountTemplate, compareSnapshotCounts, mergeRowsByMaterialName, readMaterialIssueWorkbook } from './lib/inventory-snapshot.js';
+import { calculateInventorySnapshot, readIssuedWorkbook, createIssuedTemplate, createSnapshotWorkbook, readCountWorkbook, readWorkshopCounts, createCountTemplate, compareSnapshotCounts, mergeRowsByMaterialName, readMaterialIssueWorkbook, buildStageExplanationRows, classifyWarehouseIssues } from './lib/inventory-snapshot.js';
 import { fetchRealDataBundle } from './lib/real-data.js';
 
 const emptyData = () => ({ materials: [], bom: [], orders: [], productionOrders: [], productMappings: [], orderMappings: [], chemicalNorms: [], importMeta: {}, inventory: {}, norms: [], workshopCounts: null, materialIssues: [] });
@@ -584,112 +584,326 @@ function Sidebar({ page, setPage, selectedWarehouse, onSelectWarehouse, mobileOp
   );
 }
 
+function ExecLineTrendChart({ series }) {
+  const [hoverIdx, setHoverIdx] = useState(null);
+  if (!series.length) return <EmptyInline text="Chưa có dữ liệu tiến độ theo kỳ để vẽ xu hướng." />;
+  const W = 640, H = 230, padL = 54, padR = 18, padT = 18, padB = 34;
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  const maxVal = Math.max(1, ...series.flatMap((d) => [d.planned, d.cut, d.received]));
+  const xAt = (i) => padL + (series.length === 1 ? innerW / 2 : (i / (series.length - 1)) * innerW);
+  const yAt = (v) => padT + innerH - (v / maxVal) * innerH;
+  const makePath = (key) => series.map((d, i) => `${i === 0 ? 'M' : 'L'}${xAt(i).toFixed(1)},${yAt(d[key]).toFixed(1)}`).join(' ');
+  const makeArea = (key) => `${makePath(key)} L${xAt(series.length - 1).toFixed(1)},${(padT + innerH).toFixed(1)} L${xAt(0).toFixed(1)},${(padT + innerH).toFixed(1)} Z`;
+  const active = hoverIdx !== null ? series[hoverIdx] : series[series.length - 1];
+
+  return (
+    <div className="exec-chart-wrap">
+      <div className="exec-chart-readout">
+        <span>Kỳ: <strong>{active.label}</strong></span>
+        <span><i className="dot-sky" /> Kế hoạch: <strong>{money(active.planned)}</strong></span>
+        <span><i className="dot-emerald" /> Đã Chặt: <strong>{money(active.cut)}</strong></span>
+        <span><i className="dot-amber" /> Nhập kho: <strong>{money(active.received)}</strong></span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="exec-svg" role="img" aria-label="Biểu đồ xu hướng sản lượng theo kỳ">
+        <defs>
+          <linearGradient id="areaSky" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0.24" />
+            <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0.01" />
+          </linearGradient>
+          <linearGradient id="areaEmerald" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#10b981" stopOpacity="0.22" />
+            <stop offset="100%" stopColor="#10b981" stopOpacity="0.01" />
+          </linearGradient>
+        </defs>
+        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
+          const y = padT + innerH * (1 - t);
+          return (
+            <g key={t}>
+              <line x1={padL} y1={y} x2={W - padR} y2={y} className="chart-grid-line" />
+              <text x={padL - 8} y={y + 4} textAnchor="end" className="chart-axis-text">{money(Math.round(maxVal * t))}</text>
+            </g>
+          );
+        })}
+        <path d={makeArea('planned')} fill="url(#areaSky)" />
+        <path d={makeArea('cut')} fill="url(#areaEmerald)" />
+        <path d={makePath('planned')} fill="none" stroke="#0ea5e9" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+        <path d={makePath('cut')} fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+        <path d={makePath('received')} fill="none" stroke="#f59e0b" strokeWidth="2.5" strokeDasharray="5 3" strokeLinecap="round" strokeLinejoin="round" />
+        {series.map((d, i) => (
+          <g key={d.label} onMouseEnter={() => setHoverIdx(i)} onMouseLeave={() => setHoverIdx(null)} style={{ cursor: 'pointer' }}>
+            <line x1={xAt(i)} y1={padT} x2={xAt(i)} y2={padT + innerH} stroke={hoverIdx === i ? '#38bdf8' : 'transparent'} strokeWidth="1" strokeDasharray="3 3" />
+            <circle cx={xAt(i)} cy={yAt(d.planned)} r={hoverIdx === i ? 5 : 3.5} fill="#0ea5e9" />
+            <circle cx={xAt(i)} cy={yAt(d.cut)} r={hoverIdx === i ? 5 : 3.5} fill="#10b981" />
+            <circle cx={xAt(i)} cy={yAt(d.received)} r={hoverIdx === i ? 5 : 3.5} fill="#f59e0b" />
+            <text x={xAt(i)} y={H - 10} textAnchor="middle" className="chart-axis-text">{d.label}</text>
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+function ExecDonutChart({ segments, centerValue, centerLabel }) {
+  const total = segments.reduce((s, x) => s + x.value, 0);
+  const r = 46, cx = 60, cy = 60, circ = 2 * Math.PI * r;
+  let offset = 0;
+  return (
+    <div className="exec-donut-row">
+      <svg viewBox="0 0 120 120" className="exec-donut-svg">
+        <circle cx={cx} cy={cy} r={r} fill="none" className="donut-track" strokeWidth="14" />
+        {total > 0 && segments.map((seg) => {
+          const len = (seg.value / total) * circ;
+          const dash = `${len} ${circ - len}`;
+          const el = (
+            <circle
+              key={seg.label}
+              cx={cx}
+              cy={cy}
+              r={r}
+              fill="none"
+              stroke={seg.color}
+              strokeWidth="14"
+              strokeDasharray={dash}
+              strokeDashoffset={-offset}
+              transform={`rotate(-90 ${cx} ${cy})`}
+            />
+          );
+          offset += len;
+          return el;
+        })}
+        <text x={cx} y={cy - 2} textAnchor="middle" className="donut-center-val">{centerValue}</text>
+        <text x={cx} y={cy + 14} textAnchor="middle" className="donut-center-lbl">{centerLabel}</text>
+      </svg>
+      <div className="exec-donut-legend">
+        {segments.map((seg) => {
+          const pct = total ? Math.round((seg.value / total) * 100) : 0;
+          return (
+            <div key={seg.label} className="donut-leg-item">
+              <span className="donut-leg-dot" style={{ background: seg.color }} />
+              <span className="donut-leg-name">{seg.label}</span>
+              <strong>{money(seg.value)} <small>({pct}%)</small></strong>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function Dashboard({ data, setPage, onOpenWarehouse }) {
   const orders = currentOrderRows(data);
-  const orderContext = useMemo(() => orderResolutionContext(data), [data.chemicalNorms, data.orderMappings, data.importMeta]);
-  const summaries = PLANTS.map((plant) => getPlantSummary(data, plant.id));
+  const countRows = data.workshopCounts?.rows || [];
+  const materialIssues = data.materialIssues || [];
+
   const warehouseSnapshots = useMemo(() => {
-    const countRows = data.workshopCounts?.rows || [];
     const specs = [
-      { id: 'HOA_MAU_LAF', stageLabel: 'Chặt (S − U)', lvfStage: '' },
-      { id: 'LAF', stageLabel: 'Chặt (S − U)', lvfStage: '' },
-      { id: 'HOA_MAU_LVF', stageLabel: 'May + Gò (S − V/W)', lvfStage: 'both' },
-      { id: 'LVF', stageLabel: 'May + Gò (S − V/W)', lvfStage: 'both' },
+      { id: 'HOA_MAU_LAF', short: 'Hóa mẫu LAF', stageLabel: 'Chặt (S − U)', lvfStage: '' },
+      { id: 'LAF', short: 'Xưởng LAF', stageLabel: 'Chặt (S − U)', lvfStage: '' },
+      { id: 'HOA_MAU_LVF', short: 'Hóa mẫu LVF', stageLabel: 'May + Gò (S − V/W)', lvfStage: 'both' },
+      { id: 'LVF', short: 'Xưởng LVF', stageLabel: 'May + Gò (S − V/W)', lvfStage: 'both' },
     ];
     return specs.map((spec) => {
       const info = WAREHOUSES.find((w) => w.id === spec.id);
       const snap = calculateInventorySnapshot(data, spec.id, { mode: 'planned', lvfStage: spec.lvfStage });
-      const counted = countRows.filter((r) => r.warehouseId === spec.id).length;
-      return { ...info, ...spec, snap, counted };
+      const cmp = compareSnapshotCounts(snap, countRows, spec.id, { materialIssues, lvfStage: spec.lvfStage, productionOrders: data.productionOrders || [] });
+      const merged = mergeRowsByMaterialName(cmp);
+      const counted = merged.filter((r) => r.actual !== null && r.actual !== undefined).length;
+      const withVariance = merged.filter((r) => r.variance !== null && r.variance !== undefined && Math.abs(r.variance) > 0.0001);
+      const theoryTotal = merged.reduce((s, r) => s + (Number(r.quantity) || 0), 0);
+      const issuedWipTotal = merged.reduce((s, r) => s + (Number(r.issuedFromMain) || 0), 0);
+      const actualTotal = merged.reduce((s, r) => s + (Number(r.actual) || 0), 0);
+      return { ...info, ...spec, snap, merged, counted, withVariance, theoryTotal, issuedWipTotal, actualTotal };
     });
-  }, [data]);
-  const allSummary = summaries.reduce((acc, item) => {
-    for (const key of ['count', 'active', 'enough', 'surplus', 'shortage', 'received', 'wip', 'need', 'actual', 'variance']) acc[key] += item[key];
-    return acc;
-  }, { count: 0, active: 0, enough: 0, surplus: 0, shortage: 0, received: 0, wip: 0, need: 0, actual: 0, variance: 0 });
-  const ordersRunning = orders.filter((order) => order.productionQty !== undefined ? Number(order.productionQty) > 0 : Object.values(order.progress || {}).some((value) => Number(value) > 0)).length;
-  const runningPairs = orders.reduce((sum, order) => sum + (order.productionQty !== undefined ? (Number(order.productionQty) || 0) : Object.values(order.progress || {}).reduce((inner, value) => inner + (Number(value) || 0), 0)), 0);
-  const max = Math.max(1, ...summaries.map((item) => item.count));
-  const alerts = summaries.flatMap((summary) => getInventoryRows(data, summary.plant).filter((row) => row.status === 'Thiếu').map((row) => ({ ...row, plantName: getPlantName(summary.plant) }))).slice(0, 5);
+  }, [data, countRows, materialIssues]);
+
+  const prodStats = useMemo(() => {
+    let planned = 0, cut = 0, sew = 0, go = 0, received = 0;
+    const byPeriod = new Map();
+    for (const o of orders) {
+      const eff = resolveEffectiveStageQuantities(o.stageQuantities);
+      const p = Number(o.plannedQty) || 0;
+      const c = eff.LAF_CUT ?? 0;
+      const s = eff.LVF_SEW ?? 0;
+      const g = eff.LVF_GO ?? 0;
+      const r = Number(o.stageQuantities?.RECEIVED) || 0;
+      planned += p; cut += c; sew += s; go += g; received += r;
+      const rawDate = String(o.dueDate || o.orderDate || '').trim();
+      const ym = /^\d{4}[\/-]\d{2}/.test(rawDate) ? rawDate.slice(0, 7).replace('-', '/') : 'Chưa gắn kỳ';
+      if (!byPeriod.has(ym)) byPeriod.set(ym, { label: ym, planned: 0, cut: 0, received: 0 });
+      const bucket = byPeriod.get(ym);
+      bucket.planned += p; bucket.cut += c; bucket.received += r;
+    }
+    const series = [...byPeriod.values()].sort((a, b) => a.label.localeCompare(b.label)).slice(-10);
+    return { planned, cut, sew, go, received, series };
+  }, [orders]);
+
+  const issueBreakdown = useMemo(() => {
+    const counts = { WIP: 0, DONE: 0, NOT_IN_PROGRESS: 0, NO_PO: 0 };
+    for (const wh of warehouseSnapshots) {
+      for (const row of classifyWarehouseIssues(materialIssues, wh.snap, wh.id, { lvfStage: wh.lvfStage, productionOrders: data.productionOrders || [] })) {
+        counts[row.category] += row.issuedQty;
+      }
+    }
+    return counts;
+  }, [warehouseSnapshots, materialIssues, data.productionOrders]);
+
+  const stageAnomalies = useMemo(() => buildStageExplanationRows(data.productionOrders || [], materialIssues, ''), [data.productionOrders, materialIssues]);
+
+  const totalGroups = warehouseSnapshots.reduce((s, w) => s + w.merged.length, 0);
+  const totalCounted = warehouseSnapshots.reduce((s, w) => s + w.counted, 0);
+  const totalVarianceGroups = warehouseSnapshots.reduce((s, w) => s + w.withVariance.length, 0);
+  const totalUnmapped = warehouseSnapshots.reduce((s, w) => s + w.snap.unmapped.length, 0);
+  const completionPct = prodStats.planned ? Math.round((prodStats.received / prodStats.planned) * 100) : 0;
+  const countPct = totalGroups ? Math.round((totalCounted / totalGroups) * 100) : 0;
+
+  const topVariances = useMemo(() => {
+    const items = [];
+    for (const wh of warehouseSnapshots) {
+      for (const r of wh.withVariance) {
+        items.push({ ...r, warehouseId: wh.id, warehouseName: wh.short, color: wh.color });
+      }
+    }
+    return items.sort((a, b) => Math.abs(b.variance || 0) - Math.abs(a.variance || 0)).slice(0, 6);
+  }, [warehouseSnapshots]);
+
+  const maxWhVal = Math.max(1, ...warehouseSnapshots.map((w) => Math.max(w.theoryTotal, w.issuedWipTotal, w.actualTotal)));
+
   return (
     <>
       <div className="page-heading">
-        <div><div className="eyebrow">{new Intl.DateTimeFormat('vi-VN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date()).toUpperCase()} <span>•</span> HỆ THỐNG KIỂM KÊ 4 KHO</div><h1>Tổng quan kho xưởng LAF & LVF</h1><p>Quy đổi dở dang theo TIEN-DO-SX-DONHANG: Chặt → LAF (xưởng & Hóa mẫu); May/Gò → LVF (xưởng & Hóa mẫu).</p></div>
-        <button className="button button-primary" onClick={() => setPage('snapshot')}><ClipboardCheck size={16} /> Mở kiểm kê 4 kho</button>
+        <div>
+          <div className="eyebrow">{new Intl.DateTimeFormat('vi-VN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date()).toUpperCase()} <span>•</span> BÁO CÁO QUẢN TRỊ BAN GIÁM ĐỐC</div>
+          <h1>Executive Dashboard — Kiểm kê & Tiến độ 4 Kho</h1>
+          <p>Tổng hợp sản lượng đơn hàng, tồn lý thuyết dở dang, thực lãnh kho tổng theo PO và kết quả kiểm đếm hiện trường LAF & LVF.</p>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="button button-secondary" onClick={() => setPage('guide')}><GitBranch size={16} /> Sơ đồ & Hướng dẫn</button>
+          <button className="button button-primary" onClick={() => setPage('snapshot')}><ClipboardCheck size={16} /> Mở kiểm kê 4 kho</button>
+        </div>
       </div>
+
       <div className="summary-grid">
-        <MetricCard label="MÃ VẬT TƯ" value={money(allSummary.count)} detail={`${money(data.materials.length)} mã trên danh mục chung`} icon={Boxes} tint="teal" />
-        <MetricCard label="CHỈ LỆNH TIẾN ĐỘ" value={money(orders.length)} detail={`${money(ordersRunning)} đơn đang chạy · ${money(runningPairs)} đôi`} icon={Layers3} tint="blue" />
-        <MetricCard label="ĐỊNH MỨC HÓA CHẤT" value={money(data.chemicalNorms.length)} detail={`${money(data.bom.length)} dòng BOM trực tiếp`} icon={FileSpreadsheet} tint="amber" />
-        <MetricCard label="KIỂM ĐẾM THỰC TẾ" value={money(data.workshopCounts?.rows?.length || 0)} detail={data.workshopCounts ? 'Đã nạp từ workbook thống kê' : 'Chưa nạp kiểm đếm'} icon={ClipboardCheck} tint="rose" />
+        <MetricCard label="SẢN LƯỢNG ĐƠN HÀNG" value={`${money(prodStats.planned)} đôi`} detail={`Nhập kho ${money(prodStats.received)} đôi (${completionPct}%) · Dở dang Chặt ${money(Math.max(0, prodStats.planned - prodStats.cut))}`} icon={Layers3} tint="blue" />
+        <MetricCard label="ĐỘ PHỦ KIỂM ĐẾM 4 KHO" value={`${countPct}%`} detail={`${money(totalCounted)} / ${money(totalGroups)} nhóm vật tư đã đếm · ${money(totalVarianceGroups)} nhóm lệch`} icon={ClipboardCheck} tint="teal" />
+        <MetricCard label="XUẤT KHO TỔNG (DỞ DANG)" value={money(issueBreakdown.WIP, 1)} detail={`Đã xong/Nhập kho: ${money(issueBreakdown.DONE, 0)} · Không PO: ${money(issueBreakdown.NO_PO, 0)}`} icon={Boxes} tint="amber" />
+        <MetricCard label="CẢNH BÁO QUẢN TRỊ" value={money(totalUnmapped + stageAnomalies.length)} detail={`${money(totalUnmapped)} dòng chưa ghép · ${money(stageAnomalies.length)} đơn thiếu ghi nhận Chặt/May`} icon={CircleAlert} tint="rose" />
       </div>
 
-      <section className="panel" style={{ padding: 18, marginBottom: 16 }}>
-        <div className="panel-heading" style={{ padding: '0 0 12px' }}>
-          <div><h2>Hệ thống 4 kho theo công đoạn dở dang</h2><p>Bấm vào từng kho để xem tồn lý thuyết theo đơn dở dang, đối chiếu kiểm đếm và các dòng chưa ghép</p></div>
-          <button className="text-button" onClick={() => setPage('snapshot')}>Mở màn hình chi tiết <span>→</span></button>
-        </div>
-        <div className="warehouse-overview-grid">
-          {warehouseSnapshots.map((wh) => (
-            <button type="button" key={wh.id} className="warehouse-card-btn" onClick={() => onOpenWarehouse(wh.id)}>
-              <div className="warehouse-card-top">
-                <span className={`plant-dot ${wh.color}`} />
-                <strong>{wh.name}</strong>
-                <span className="period-badge">{wh.stageLabel}</span>
-              </div>
-              <div className="warehouse-card-metrics">
-                <div><span>Đã tính</span><b>{money(wh.snap.summary.length)} mã</b></div>
-                <div><span>Kiểm đếm</span><b>{money(wh.counted)} mã</b></div>
-                <div><span>Chưa ghép</span><b className={wh.snap.unmapped.length ? 'text-warning' : ''}>{money(wh.snap.unmapped.length)} dòng</b></div>
-              </div>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <div className="dashboard-grid">
-        <section className="panel plant-panel">
-          <div className="panel-heading"><div><h2>Tình hình theo nhà máy</h2><p>Số mã đang phát sinh và mức độ kiểm kê</p></div><button className="text-button" onClick={() => setPage('inventory')}>Chi tiết <span>→</span></button></div>
-          <div className="plant-chart">
-            {summaries.map((item) => {
-              const plant = PLANTS.find((entry) => entry.id === item.plant);
-              const activeWidth = item.count ? (item.active / item.count) * 100 : 0;
-              const shortageWidth = item.count ? (item.shortage / item.count) * 100 : 0;
-              return <div className="chart-row" key={item.plant}>
-                <div className="chart-row-label"><span className={`plant-dot ${plant.color}`} />{plant.name}<strong>{money(item.count)} mã</strong></div>
-                <div className="bar-track"><span className={`bar-fill ${plant.color}`} style={{ width: `${(item.count / max) * 100}%` }}><i style={{ width: `${activeWidth}%` }} /></span></div>
-                <div className="chart-row-foot"><span>{money(item.active)} phát sinh</span><span className={item.shortage ? 'text-danger' : ''}>{money(item.shortage)} thiếu <span className="mini-meter"><i style={{ width: `${Math.min(100, shortageWidth * 8)}%` }} /></span></span></div>
-              </div>;
-            })}
-            {!data.materials.length && <EmptyInline text="Chưa có danh mục vật tư. Nhập workbook để bắt đầu." />}
+      <div className="exec-charts-grid">
+        <section className="panel" style={{ padding: 20 }}>
+          <div className="panel-heading" style={{ padding: '0 0 12px' }}>
+            <div>
+              <h2>Xu hướng sản lượng & Tiến độ hoàn thành</h2>
+              <p>Đường line so sánh Kế hoạch đơn hàng, Đã Chặt và Nhập kho thành phẩm theo kỳ giao hàng</p>
+            </div>
+            <span className="period-badge">{prodStats.series.length} KỲ</span>
           </div>
-          <div className="chart-legend"><span><i className="legend-dot active" /> Có phát sinh</span><span><i className="legend-dot" /> Danh mục</span><span><i className="legend-dot shortage" /> Cần xử lý</span></div>
+          <ExecLineTrendChart series={prodStats.series} />
         </section>
 
-        <section className="panel reconciliation-panel">
-          <div className="panel-heading"><div><h2>Đối chiếu tồn kho</h2><p>So sánh số lý thuyết với kiểm đếm thực tế</p></div><span className="period-badge">KỲ HIỆN TẠI</span></div>
-          <div className="reconcile-rows">
-            <p>Không cộng số lượng của các vật tư khác đơn vị. Mở bảng kiểm kê để đối chiếu từng mã và đơn vị.</p>
-            <p>Số tồn ở màn hình kiểm kê là phép ước tính theo dữ liệu WIP cũ, không phải sổ nhập–xuất–tồn.</p>
+        <section className="panel" style={{ padding: 20 }}>
+          <div className="panel-heading" style={{ padding: '0 0 12px' }}>
+            <div>
+              <h2>So sánh 3 chỉ số theo từng kho (Định mức · Kho tổng · Thực đếm)</h2>
+              <p>Bấm vào từng kho để đi thẳng vào bảng kiểm kê chi tiết</p>
+            </div>
+            <button className="text-button" onClick={() => setPage('snapshot')}>Chi tiết <span>→</span></button>
           </div>
-          <button className="button button-ghost full-width" onClick={() => setPage('inventory')}>Xem bảng đối chiếu <span>→</span></button>
+          <div className="exec-bar-list">
+            {warehouseSnapshots.map((wh) => (
+              <button type="button" key={wh.id} className="exec-bar-card" onClick={() => onOpenWarehouse(wh.id)}>
+                <div className="exec-bar-head">
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span className={`plant-dot ${wh.color}`} />
+                    <strong>{wh.name}</strong>
+                  </span>
+                  <span className="period-badge">{wh.stageLabel}</span>
+                </div>
+                <div className="exec-bars-stack">
+                  <div className="exec-mini-bar"><span>Định mức</span><div><i style={{ width: `${Math.min(100, (wh.theoryTotal / maxWhVal) * 100)}%`, background: '#0ea5e9' }} /></div><b>{money(wh.theoryTotal, 0)}</b></div>
+                  <div className="exec-mini-bar"><span>Kho tổng</span><div><i style={{ width: `${Math.min(100, (wh.issuedWipTotal / maxWhVal) * 100)}%`, background: '#f59e0b' }} /></div><b>{money(wh.issuedWipTotal, 0)}</b></div>
+                  <div className="exec-mini-bar"><span>Thực đếm</span><div><i style={{ width: `${Math.min(100, (wh.actualTotal / maxWhVal) * 100)}%`, background: '#10b981' }} /></div><b>{money(wh.actualTotal, 0)}</b></div>
+                </div>
+                <div className="exec-bar-foot">
+                  <span>{money(wh.counted)} / {money(wh.merged.length)} nhóm đã đếm</span>
+                  <span className={wh.snap.unmapped.length ? 'text-warning' : ''}>{money(wh.snap.unmapped.length)} chưa ghép</span>
+                </div>
+              </button>
+            ))}
+          </div>
         </section>
       </div>
 
-      <div className="bottom-grid">
+      <div className="dashboard-grid" style={{ marginTop: 16 }}>
+        <section className="panel" style={{ padding: 20 }}>
+          <div className="panel-heading" style={{ padding: '0 0 12px' }}>
+            <div>
+              <h2>Cơ cấu kiểm kê & Phân bổ xuất kho tổng</h2>
+              <p>Tỷ lệ nhóm vật tư đã kiểm đếm và phân loại phiếu xuất kho tổng theo PO</p>
+            </div>
+          </div>
+          <div className="exec-donuts-stack">
+            <ExecDonutChart
+              centerValue={`${countPct}%`}
+              centerLabel="Đã đếm"
+              segments={[
+                { label: 'Đã đếm & khớp / dư', value: Math.max(0, totalCounted - totalVarianceGroups), color: '#10b981' },
+                { label: 'Đã đếm (có chênh lệch)', value: totalVarianceGroups, color: '#f59e0b' },
+                { label: 'Chưa kiểm đếm', value: Math.max(0, totalGroups - totalCounted), color: '#64748b' },
+              ]}
+            />
+            <ExecDonutChart
+              centerValue={money(issueBreakdown.WIP + issueBreakdown.DONE + issueBreakdown.NO_PO, 0)}
+              centerLabel="Tổng xuất"
+              segments={[
+                { label: 'Chỉ lệnh dở dang (TongHop)', value: Math.round(issueBreakdown.WIP), color: '#0ea5e9' },
+                { label: 'Đơn đã hoàn tất / Nhập kho', value: Math.round(issueBreakdown.DONE), color: '#8b5cf6' },
+                { label: 'Xuất chung không gắn PO', value: Math.round(issueBreakdown.NO_PO), color: '#f43f5e' },
+              ]}
+            />
+          </div>
+        </section>
+
         <section className="panel table-panel">
-          <div className="panel-heading"><div><h2>Đơn hàng gần đây</h2><p>Tiến độ theo mã hàng và màu sắc</p></div><button className="text-button" onClick={() => setPage('orders')}>Tất cả đơn hàng <span>→</span></button></div>
-          {orders.length ? <div className="table-scroll"><table><thead><tr><th>MÃ ĐƠN HÀNG</th><th>MÃ HÀNG / MÀU</th><th>KẾ HOẠCH</th><th>TIẾN ĐỘ</th><th>TRẠNG THÁI</th></tr></thead><tbody>{orders.slice(0, 5).map((order) => {
-            const done = Object.values(order.progress || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
-            const production = order.productionQty !== undefined ? Number(order.productionQty) || 0 : done;
-            const percent = order.plannedQty ? Math.min(100, (production / order.plannedQty) * 100) : 0;
-            return <tr key={orderKey(order)}><td><strong>{resolvedOrderNo(order, orderContext) || 'Chưa ghép chỉ lệnh'}</strong></td><td><span className="product-code">{order.model}</span><small>{order.color} · {order.colorName || 'Chưa ghi tên màu'}</small></td><td className="numeric">{money(order.plannedQty)}</td><td><div className="progress-cell"><div className="progress-track"><i style={{ width: `${percent}%` }} /></div><span>{Math.round(percent)}%</span></div></td><td><StatusBadge status={production > 0 ? 'Đang sản xuất' : order.status || 'Chờ sản xuất'} /></td></tr>;
-          })}</tbody></table></div> : <EmptyState title="Chưa có đơn hàng" text="Nhập file DON HANG.xlsx hoặc thêm đơn thủ công." action="Nhập đơn hàng" onAction={() => setPage('orders')} />}
-        </section>
-        <section className="panel alerts-panel">
-          <div className="panel-heading"><div><h2>Cần chú ý</h2><p>Các mã vật tư đang thiếu theo kiểm kê</p></div><span className="alert-count">{alerts.length}</span></div>
-          {alerts.length ? <div className="alert-list">{alerts.map((row) => <div className="alert-row" key={`${row.plant}|${row.catalogNo}`}><div className="alert-symbol"><CircleAlert size={16} /></div><div className="alert-copy"><strong>{row.materialCode} · {row.name}</strong><span>{row.plantName} <i>·</i> Lệch {money(row.variance, 1)} {row.unit}</span></div><StatusBadge status="Thiếu" /></div>)}</div> : <div className="all-clear"><div><Check size={20} /></div><strong>Chưa có cảnh báo thiếu</strong><span>{data.materials.length ? 'Chưa thấy dòng thiếu; vẫn cần kiểm tra các dòng chưa kiểm kê.' : 'Nhập dữ liệu để bắt đầu theo dõi.'}</span></div>}
-          <button className="text-button alert-footer" onClick={() => setPage('inventory')}>Mở kiểm kê <span>→</span></button>
+          <div className="panel-heading">
+            <div>
+              <h2>Top vật tư chênh lệch lớn nhất (Thực đếm vs Định mức)</h2>
+              <p>Các nhóm mã cần Ban Giám Đốc / Quản lý kho ưu tiên kiểm tra</p>
+            </div>
+            <span className="alert-count">{totalVarianceGroups}</span>
+          </div>
+          {topVariances.length ? (
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>KHO</th>
+                    <th>MÃ / TÊN VẬT TƯ</th>
+                    <th className="numeric">ĐỊNH MỨC</th>
+                    <th className="numeric">THỰC ĐẾM</th>
+                    <th className="numeric">CHÊNH LỆCH</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topVariances.map((item) => (
+                    <tr key={`${item.warehouseId}|${item.materialCode}|${item.unit}`} onClick={() => onOpenWarehouse(item.warehouseId)} style={{ cursor: 'pointer' }}>
+                      <td><span className="plant-tag">{item.warehouseName}</span></td>
+                      <td><strong>{item.materialCode}</strong><small>{item.materialName}</small></td>
+                      <td className="numeric">{money(item.quantity, 1)}</td>
+                      <td className="numeric">{money(item.actual, 1)}</td>
+                      <td className={`numeric strong-cell ${(item.variance || 0) < 0 ? 'text-danger' : 'text-warning'}`}>{money(item.variance, 1)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="all-clear" style={{ padding: 28 }}>
+              <div><Check size={20} /></div>
+              <strong>Chưa có chênh lệch lớn</strong>
+              <span>Nhập số thực đếm tại màn hình Kiểm kê 4 kho để theo dõi.</span>
+            </div>
+          )}
         </section>
       </div>
     </>
