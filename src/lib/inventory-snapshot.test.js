@@ -55,7 +55,7 @@ test('export contains metadata, per-material and per-order results and gaps',asy
  const result=calculateInventorySnapshot(data,'LAF',{mode:'issued',issuedRows:issued});
  const buf=await createSnapshotWorkbook(result,{asOf:'2026-11-14T10:00',warehouse:'Kho xưởng LAF',modeLabel:'Số đôi đã lĩnh'});
  const wb=new ExcelJS.Workbook(); await wb.xlsx.load(buf);
- assert.deepEqual(wb.worksheets.map(s=>s.name),['ThongTin','TongHop','TheoDon','ChuaGhep','GiaiThich']);
+ assert.deepEqual(wb.worksheets.map(s=>s.name),['ThongTin','TongHop','TheoDon','ChuaGhep','GiaiThich','ThucLanh_SoVoi_LyThuyet']);
  assert.equal(wb.getWorksheet('TongHop').getCell('E2').value,110);
  assert.equal(wb.getWorksheet('TheoDon').getCell('H2').value,300);
 });
@@ -209,4 +209,29 @@ test('createSnapshotWorkbook adds GiaiThich sheet for orders with Nhập kho/Đ�
  assert.equal(sheet.getCell('I2').value,344);
  assert.equal(sheet.getCell('J2').value,344);
  assert.ok(String(sheet.getCell('L2').value).includes('Không có xuất NVL theo PO'));
+});
+test('TongHop issued column counts only WIP POs; ThucLanh_SoVoi_LyThuyet splits the rest',async()=>{
+ const res={hasSource:true,orderCount:1,unmapped:[],stage:'Chặt',
+  rows:[{orderNo:'DH1',purchaseOrder:'PO-WIP',model:'C',color:'1',basisQty:10,materialCode:'003362',materialName:'CAO SU3L',unit:'KÍ',quantity:100}],
+  summary:[{materialCode:'003362',materialName:'CAO SU3L',unit:'KÍ',orderCount:1,quantity:100,details:[{orderNo:'DH1'}]}]};
+ const prod=[{orderNo:'DH1',purchaseOrder:'PO-WIP'},{orderNo:'DH2',purchaseOrder:'PO-DONE'}];
+ const issues=[
+  {warehouseId:'HOA_MAU_LAF',po:'PO-WIP',materialCode:'003362',materialName:'CAO SU3L',unit:'KÍ',issuedQty:60},
+  {warehouseId:'HOA_MAU_LAF',po:'PO-DONE',materialCode:'003362',materialName:'CAO SU3L',unit:'KÍ',issuedQty:500},
+  {warehouseId:'HOA_MAU_LAF',po:'PO-X',materialCode:'003362',materialName:'CAO SU3L',unit:'KÍ',issuedQty:7},
+  {warehouseId:'HOA_MAU_LAF',po:'',materialCode:'003362',materialName:'CAO SU3L',unit:'KÍ',issuedQty:3},
+ ];
+ const cmp=compareSnapshotCounts(res,[],'HOA_MAU_LAF',{materialIssues:issues,productionOrders:prod});
+ assert.equal(cmp[0].issuedFromMain,60);
+ const bytes=await createSnapshotWorkbook(res,{asOf:'x',warehouse:'Kho Hóa mẫu LAF',warehouseId:'HOA_MAU_LAF',comparison:cmp,productionOrders:prod,materialIssues:issues});
+ const wb=new ExcelJS.Workbook(); await wb.xlsx.load(bytes);
+ assert.equal(wb.getWorksheet('TongHop').getCell('F2').value,60);
+ const r=wb.getWorksheet('ThucLanh_SoVoi_LyThuyet');
+ assert.equal(r.getCell('D2').value,570);
+ assert.equal(r.getCell('E2').value,60);
+ assert.equal(r.getCell('F2').value,500);
+ assert.equal(r.getCell('G2').value,7);
+ assert.equal(r.getCell('H2').value,3);
+ assert.equal(r.getCell('I2').value,100);
+ assert.equal(r.getCell('J2').value,-40);
 });

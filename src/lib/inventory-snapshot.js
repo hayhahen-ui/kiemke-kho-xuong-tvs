@@ -200,7 +200,7 @@ export async function createSnapshotWorkbook(result, metadata) {
   const info=wb.addWorksheet('ThongTin');
   for (const row of [['Mốc kiểm kê',metadata.asOf],['Kho',metadata.warehouse],['Công đoạn',result.stage],['Cơ sở',metadata.modeLabel],['Cách gộp',metadata.groupByName ? 'Gộp theo tên vật tư (ghép chung mã)' : 'Tách theo mã vật tư'],['Múi giờ thiết bị',metadata.timeZone || ''],['File tiến độ',metadata.progressSource || ''],['File định mức',metadata.normSource || ''],['File số đôi đã lĩnh',metadata.issuedSource || ''],['File kiểm đếm',metadata.countSource || ''],['Ghi chú','Tính theo dữ liệu đã nạp hiện tại, không tự dựng lại dữ liệu quá khứ. Số dở dang theo định mức; không phải tồn sổ.'],['Cảnh báo','Kiểm tra ChuaGhep và GiaiThich; kết quả có thể chưa đầy đủ.']]) info.addRow(row); info.columns=[{width:25},{width:85}];
   const sum=wb.addWorksheet('TongHop'); sum.addRow(['Mã vật tư','Tên vật tư','Đơn vị','Số chỉ lệnh','Tồn lý thuyết theo dở dang']);
-  if (metadata.comparison) { sum.getRow(1).getCell(6).value='Đã lãnh kho tổng'; sum.getRow(1).getCell(7).value='Kiểm đếm thực tế'; sum.getRow(1).getCell(8).value='Chênh lệch tạm tính'; sum.getRow(1).getCell(9).value='Ghi chú'; }
+  if (metadata.comparison) { sum.getRow(1).getCell(6).value='Đã lãnh kho tổng (chỉ lệnh dở dang)'; sum.getRow(1).getCell(7).value='Kiểm đếm thực tế'; sum.getRow(1).getCell(8).value='Chênh lệch tạm tính'; sum.getRow(1).getCell(9).value='Ghi chú'; }
   (metadata.comparison || metadata.summaryRows || result.summary).forEach(r=>sum.addRow([r.materialCode,r.materialName,r.unit,r.orderCount,r.quantity, ...(metadata.comparison ? [r.issuedFromMain,r.actual,r.variance,r.comparison] : [])]));
   const detail=wb.addWorksheet('TheoDon'); detail.addRow(['Chỉ lệnh','PO','Mã hàng','Màu','Công đoạn','Số đôi cơ sở','Đã qua công đoạn','Còn lại','Mã vật tư','Tên vật tư','ĐVT','Định mức/đôi','Tồn lý thuyết','Nguồn','Dòng nguồn']);
   result.rows.forEach(r=>detail.addRow([r.orderNo,r.purchaseOrder,r.model,r.color,r.stage,r.qty,r.done,r.basisQty,r.materialCode,r.materialName,r.unit,r.rate,r.quantity,r.source,r.sourceRow]));
@@ -209,29 +209,90 @@ export async function createSnapshotWorkbook(result, metadata) {
   explain.addRow(['Chỉ lệnh','PO','Mã hàng','Màu','SL đơn hàng','Chặt (gốc)','May (gốc)','Gò (gốc)','Đóng thùng','Nhập kho','Xuất NVL theo PO (dòng)','Giải thích & Xử lý hệ thống']);
   const explainRows = buildStageExplanationRows(metadata.productionOrders, metadata.materialIssues, metadata.warehouseId);
   explainRows.forEach(r=>explain.addRow([r.orderNo,r.purchaseOrder,r.model,r.color,r.plannedQty,r.rawChat,r.rawMay,r.rawGo,r.packed,r.received,r.issueLines,r.explanation]));
-  for(const s of [sum,detail,gaps,explain]) {s.views=[{state:'frozen',ySplit:1}]; s.columns.forEach(c=>{c.width=22;}); s.getRow(1).font={bold:true};}
+
+  const recon=wb.addWorksheet('ThucLanh_SoVoi_LyThuyet');
+  recon.addRow(['Mã vật tư','Tên vật tư','Đơn vị','Tổng thực lãnh kho tổng','Lãnh cho chỉ lệnh dở dang (= cột F TongHop)','Lãnh cho đơn đã hoàn tất / đã nhập kho','Lãnh cho PO không có trong tiến độ','Xuất không gắn PO','Nhu cầu lý thuyết dở dang','Chênh lệch (Lãnh dở dang − Lý thuyết)','Ghi chú']);
+  const reconRows = (metadata.materialIssues || []).length
+    ? buildIssuedVsTheoryRows(metadata.materialIssues, result, metadata.warehouseId, { lvfStage: metadata.lvfStage, productionOrders: metadata.productionOrders, groupByName: metadata.groupByName })
+    : [];
+  reconRows.forEach(r=>recon.addRow([r.materialCode,r.materialName,r.unit,r.total,r.wip,r.done,r.notInProgress,r.noPo,r.theory,r.variance,r.note]));
+  if (reconRows.length) {
+    const t = reconRows.reduce((a,r)=>({total:a.total+r.total,wip:a.wip+r.wip,done:a.done+r.done,nip:a.nip+r.notInProgress,nopo:a.nopo+r.noPo}),{total:0,wip:0,done:0,nip:0,nopo:0});
+    const totalRow = recon.addRow(['TỔNG CỘNG','','',t.total,t.wip,t.done,t.nip,t.nopo,'','','Tổng các đơn vị khác nhau chỉ mang tính tham khảo']);
+    totalRow.font = { bold: true };
+  }
+
+  // Formatting to match the reviewed template: colored tabs, bold header, frozen first row.
+  const tabColors = [[info,'FFFFC000'],[sum,'FFFF99CC'],[detail,'FF92D050'],[gaps,'FF00B0F0'],[explain,'FFFF0000'],[recon,'FF7030A0']];
+  for (const [s,color] of tabColors) s.properties.tabColor = { argb: color };
+  const headerFill = { type:'pattern', pattern:'solid', fgColor:{ argb:'FFD9E1F2' } };
+  for(const s of [sum,detail,gaps,explain,recon]) {
+    s.views=[{state:'frozen',ySplit:1}];
+    s.columns.forEach(c=>{c.width=18;});
+    const h=s.getRow(1); h.font={bold:true}; h.alignment={vertical:'middle',wrapText:true}; h.height=32;
+    h.eachCell(c=>{c.fill=headerFill;});
+  }
+  sum.getColumn(1).width=24; sum.getColumn(2).width=52; sum.getColumn(3).width=8; sum.getColumn(9).width=34;
+  for (const c of [5,6,7,8]) sum.getColumn(c).numFmt='#,##0.00';
+  if (metadata.comparison) {
+    const yellow={ type:'pattern', pattern:'solid', fgColor:{ argb:'FFFFF2CC' } };
+    sum.eachRow((row)=>{ row.getCell(6).fill=yellow; });
+  }
+  recon.getColumn(1).width=24; recon.getColumn(2).width=52; recon.getColumn(3).width=8; recon.getColumn(11).width=60;
+  for (const c of [4,5,6,7,8,9,10]) recon.getColumn(c).numFmt='#,##0.00';
+  const reconFill={ type:'pattern', pattern:'solid', fgColor:{ argb:'FFFFF2CC' } };
+  recon.eachRow((row)=>{ row.getCell(5).fill=reconFill; });
   explain.getColumn(12).width = 65;
   return wb.xlsx.writeBuffer();
 }
 
 const canonicalCode = (v) => (/^\d+$/.test(String(v).trim()) ? String(v).trim().replace(/^0+(?=\d)/, '') : norm(v));
 
-export function summarizeWarehouseIssued(materialIssues, result, warehouseId, { lvfStage = '' } = {}) {
-  const activePOs = new Set((result?.rows || []).map((r) => norm(r.purchaseOrder)).filter(Boolean));
-  const byKey = new Map();
-  const byCanon = new Map();
+export const ISSUE_CATEGORY = {
+  WIP: 'Chỉ lệnh dở dang',
+  DONE: 'Đơn đã hoàn tất công đoạn / đã nhập kho',
+  NOT_IN_PROGRESS: 'PO không có trong file tiến độ',
+  NO_PO: 'Xuất không gắn PO',
+};
+
+/**
+ * Classify every main-warehouse issue line of the selected warehouse by the status of its PO:
+ * only POs that still have unfinished pairs at the warehouse stage count toward TongHop.
+ */
+export function classifyWarehouseIssues(materialIssues, result, warehouseId, { lvfStage = '', productionOrders = [] } = {}) {
+  const wipPOs = new Set((result?.rows || [])
+    .filter((r) => Number(r.basisQty) > 0 || Number(r.quantity) > 0)
+    .map((r) => norm(r.purchaseOrder)).filter(Boolean));
+  const knownPOs = new Set((productionOrders || []).map((o) => norm(o.purchaseOrder)).filter(Boolean));
+  for (const r of result?.rows || []) if (r.purchaseOrder) knownPOs.add(norm(r.purchaseOrder));
+  const out = [];
   for (const row of materialIssues || []) {
     if (row.warehouseId !== warehouseId) continue;
     if ((warehouseId === 'LVF' || warehouseId === 'HOA_MAU_LVF') && (lvfStage === 'may' || lvfStage === 'go')) {
       const st = norm(row.stage || '');
       if (st && ((lvfStage === 'may' && !st.includes('MAY')) || (lvfStage === 'go' && !/\bGO\b/.test(st)))) continue;
     }
-    if (activePOs.size > 0 && row.po && !activePOs.has(norm(row.po))) continue;
     const qty = Number(row.issuedQty);
     if (!Number.isFinite(qty) || qty <= 0) continue;
+    const po = norm(row.po);
+    let category;
+    if (!po) category = 'NO_PO';
+    else if (wipPOs.has(po)) category = 'WIP';
+    else if (knownPOs.has(po)) category = 'DONE';
+    else category = 'NOT_IN_PROGRESS';
+    out.push({ ...row, issuedQty: qty, category });
+  }
+  return out;
+}
+
+export function summarizeWarehouseIssued(materialIssues, result, warehouseId, { lvfStage = '', productionOrders = [] } = {}) {
+  const byKey = new Map();
+  const byCanon = new Map();
+  for (const row of classifyWarehouseIssues(materialIssues, result, warehouseId, { lvfStage, productionOrders })) {
+    if (row.category !== 'WIP') continue;
     const k = [row.materialCode, row.unit].map(norm).join('|');
     const existing = byKey.get(k) || { materialCode: row.materialCode, materialName: row.materialName, unit: row.unit, issuedFromMain: 0 };
-    existing.issuedFromMain += qty;
+    existing.issuedFromMain += row.issuedQty;
     byKey.set(k, existing);
     const ck = `${canonicalCode(row.materialCode)}|${norm(row.unit)}`;
     if (!byCanon.has(ck)) byCanon.set(ck, k);
@@ -239,14 +300,71 @@ export function summarizeWarehouseIssued(materialIssues, result, warehouseId, { 
   return { byKey, byCanon };
 }
 
+/**
+ * Per-material reconciliation: total issued from the main warehouse split by PO status
+ * versus the theoretical WIP requirement. Optionally merged by chemical name signature.
+ */
+export function buildIssuedVsTheoryRows(materialIssues, result, warehouseId, { lvfStage = '', productionOrders = [], groupByName = false } = {}) {
+  const lines = classifyWarehouseIssues(materialIssues, result, warehouseId, { lvfStage, productionOrders });
+  const keyOf = (code, name, unit) => (groupByName
+    ? `${normalizeMaterialNameKey(name) || norm(code)}|${norm(unit)}`
+    : `${canonicalCode(code)}|${norm(unit)}`);
+  const map = new Map();
+  const get = (code, name, unit) => {
+    const k = keyOf(code, name, unit);
+    if (!map.has(k)) map.set(k, { codes: new Set(), names: [], unit, theory: 0, hasTheory: false, WIP: 0, DONE: 0, NOT_IN_PROGRESS: 0, NO_PO: 0, donePOs: new Set(), otherPOs: new Set() });
+    const x = map.get(k);
+    if (code) x.codes.add(String(code).trim());
+    if (name) x.names.push(name);
+    return x;
+  };
+  for (const s of result?.summary || []) {
+    const x = get(s.materialCode, s.materialName, s.unit);
+    x.theory += Number(s.quantity) || 0;
+    x.hasTheory = true;
+  }
+  for (const l of lines) {
+    const x = get(l.materialCode, l.materialName, l.unit);
+    x[l.category] += l.issuedQty;
+    if (l.category === 'DONE') x.donePOs.add(l.po);
+    if (l.category === 'NOT_IN_PROGRESS') x.otherPOs.add(l.po);
+  }
+  const rows = [];
+  for (const x of map.values()) {
+    const total = x.WIP + x.DONE + x.NOT_IN_PROGRESS + x.NO_PO;
+    if (total <= 0 && !x.hasTheory) continue;
+    const name = x.names.find((n) => !/\bADIDAS\b/i.test(n)) || x.names[0] || '';
+    const variance = x.WIP - x.theory;
+    const notes = [];
+    if (x.DONE > 0) notes.push(`${x.donePOs.size} PO đã hoàn tất/nhập kho vẫn có lãnh NVL`);
+    if (x.NOT_IN_PROGRESS > 0) notes.push(`${x.otherPOs.size} PO không có trong tiến độ`);
+    if (x.NO_PO > 0) notes.push('Có xuất không gắn PO');
+    if (!x.hasTheory && total > 0) notes.push('Không có nhu cầu lý thuyết dở dang');
+    rows.push({
+      materialCode: [...x.codes].join(' / '),
+      materialName: name,
+      unit: x.unit,
+      total,
+      wip: x.WIP,
+      done: x.DONE,
+      notInProgress: x.NOT_IN_PROGRESS,
+      noPo: x.NO_PO,
+      theory: x.hasTheory ? x.theory : 0,
+      variance,
+      note: notes.join('; '),
+    });
+  }
+  return rows.sort((a, b) => String(a.materialCode).localeCompare(String(b.materialCode), 'vi', { numeric: true }));
+}
+
 // Counts are optional; keep null distinct from a real zero. Extra materials are
 // not claimed as surplus when the theoretical side has gaps or no source.
-export function compareSnapshotCounts(result, countRows, warehouseId, { materialIssues = [], lvfStage = '' } = {}) {
+export function compareSnapshotCounts(result, countRows, warehouseId, { materialIssues = [], lvfStage = '', productionOrders = [] } = {}) {
   const byKey = new Map();
   for (const c of countRows.filter(x=>x.warehouseId===warehouseId)) byKey.set([c.materialCode,c.unit].map(norm).join('|'),c);
   const hasIssueData = Array.isArray(materialIssues) && materialIssues.length > 0;
   const { byKey: issuedMap, byCanon: issuedCanon } = hasIssueData
-    ? summarizeWarehouseIssued(materialIssues, result, warehouseId, { lvfStage })
+    ? summarizeWarehouseIssued(materialIssues, result, warehouseId, { lvfStage, productionOrders })
     : { byKey: new Map(), byCanon: new Map() };
   const takeIssued = (materialCode, unit) => {
     if (!hasIssueData) return null;
