@@ -763,3 +763,245 @@ td small { display: block; margin-top: 3px; color: #899796; font-size: 8px; line
     grid-template-columns: 1fr;
   }
 }
+
+/* === Typography Scale (+1 step) & High-Contrast Light/Dark Theme === */
+:root {
+  --ink: #122a2e;
+  --muted: #465b5e;
+  --line: #d4e0dd;
+  --surface: #ffffff;
+}
+
+body {
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.breadcrumbs { font-size: 13px; color: #526769; }
+.nav-item span:nth-child(2) { font-size: 14px; }
+.nav-label { font-size: 11px; color: #9ec0bc; }
+.plant-link { font-size: 13px; }
+.workspace-copy strong { font-size: 14px; }
+.workspace-copy span { font-size: 12px; }
+.help-card strong { font-size: 13px; }
+.help-card p, .help-card button { font-size: 12px; }
+
+.eyebrow { font-size: 11px; color: #4f6668; }
+.page-heading h1 { font-size: clamp(26px, 2.2vw, 34px); color: var(--ink); }
+.page-heading p { font-size: 13.5px; color: var(--muted); }
+.button { font-size: 13px; }
+.button-small { font-size: 12px; }
+.connection-pill { font-size: 12px; }
+.local-notice, .mapping-warning, .task-guidance { font-size: 13px; }
+.helper-label { font-size: 12.5px; color: var(--muted); }
+
+.summary-card span, .metric-inline span { font-size: 11.5px; color: var(--muted); }
+.summary-card strong, .metric-inline strong { font-size: 23px; }
+.warehouse-overview-card strong { font-size: 15px; }
+.warehouse-overview-card small { font-size: 12.5px; color: var(--muted); }
+
+.subtabs button, .filter-pills button, .plant-tabs button { font-size: 13px; }
+.search-input input, .form-grid input, .form-grid select { font-size: 13.5px; }
+.form-grid label { font-size: 12.5px; color: var(--ink); }
+
+table th { font-size: 12px; color: #294548; }
+table td { font-size: 13.5px; color: var(--ink); }
+table td small { font-size: 12px; color: var(--muted); }
+.table-footnote { font-size: 12.5px; color: var(--muted); }
+
+.mindmap-node span, .mindmap-branch-head span, .mindmap-wh-chip span,
+.guide-step-file, .guide-step-card p, .sitemap-card span { font-size: 12px; color: var(--muted); }
+.mindmap-node strong, .mindmap-branch-head strong, .mindmap-wh-chip strong,
+.guide-step-head strong, .sitemap-card strong { font-size: 13.5px; color: var(--ink); }
+.guide-step-num { font-size: 11px; }
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  color: #f1f7f6;
+  background: #0b1417;
+  --ink: #f1f7f6;
+  --muted: #b4c8c6;
+  --line: #294149;
+  --teal: #2dd4bf;
+  --teal-dark: #0f2529;
+  --surface: #132025;
+  --shadow: 0 10px 30px rgba(0, 0, 0, .45);
+}
+
+:root[data-theme='dark'] body {
+  background: #0b1417;
+  color: #f1f7f6;
+}
+
+:root[data-theme='dark'] .sidebar {
+  background: #091316;
+  border-right: 1px solid #1e333a;
+}
+
+:root[data-theme='dark'] .topbar {
+  background: rgba(15, 27, 31, 0.94);
+  border-bottom-color: #263d44;
+}
+
+:root[data-theme='dark'] .breadcrumbs { color: #9db6b4; }
+:root[data-theme='dark'] .breadcrumbs strong { color: #f1f7f6; }
+
+:root[data-theme='dark'] .panel,
+:root[data-theme='dark'] .summary-card,
+:root[data-theme='dark'] .metric-inline,
+:root[data-theme='dark'] .warehouse-overview-card,
+:root[data-theme='dark'] .modal-card,
+:root[data-theme='dark'] .guide-step-card,
+:root[data-theme='dark'] .sitemap-card,
+:root[data-theme='dark'] .mindmap-node,
+:root[data-theme='dark'] .mindmap-branch {
+  background: #132025;
+  border-color: #294149;
+  color: #f1f7f6;
+}
+
+:root[data-theme='dark'] .mindmap-wh-chip,
+:root[data-theme='dark'] .guide-step-file {
+  background: #1a2d33;
+  border-color: #314d56;
+  color: #d7e8e6;
+}
+
+:root[data-theme='dark'] .sitemap-card:hover,
+:root[data-theme='dark'] .mindmap-wh-chip:hover {
+  border-color: #38bdf8;
+  background: #193038;
+}
+
+:root[data-theme='dark'] .page-heading h1,
+:root[data-theme='dark'] h1,
+:root[data-theme='dark'] h2,
+:root[data-theme='dark'] h3,
+:root[data-theme='dark'] strong {
+  color: #f4f9f8;
+}
+
+:root[data-theme='dark'] .eyebrow,
+:root[data-theme='dark'] .page-heading p,
+:root[data-theme='dark'] .helper-label,
+:root[data-theme='dark'] .summary-card span,
+:root[data-theme='dark'] .metric-inline span,
+:root[data-theme='dark'] .table-footnote {
+  color: #b4c8c6;
+}
+
+:root[data-theme='dark'] .button-primary {
+  background: #16867d;
+  border-color: #1ea398;
+  color: #ffffff;
+}
+:root[data-theme='dark'] .button-primary:hover {
+  background: #1b9b90;
+}
+
+:root[data-theme='dark'] .button-secondary,
+:root[data-theme='dark'] .icon-button,
+:root[data-theme='dark'] .plant-tabs button,
+:root[data-theme='dark'] .filter-pills button,
+:root[data-theme='dark'] .subtabs button {
+  background: #192a30;
+  border-color: #314d56;
+  color: #e6f1ef;
+}
+
+:root[data-theme='dark'] .button-secondary:hover,
+:root[data-theme='dark'] .icon-button:hover,
+:root[data-theme='dark'] .plant-tabs button:hover,
+:root[data-theme='dark'] .filter-pills button:hover {
+  background: #21373f;
+  color: #ffffff;
+}
+
+:root[data-theme='dark'] .plant-tabs button.active,
+:root[data-theme='dark'] .filter-pills button.selected,
+:root[data-theme='dark'] .subtabs button.active {
+  background: #167a72;
+  border-color: #2dd4bf;
+  color: #ffffff;
+}
+
+:root[data-theme='dark'] .search-input,
+:root[data-theme='dark'] input,
+:root[data-theme='dark'] select,
+:root[data-theme='dark'] textarea {
+  background: #0e191d;
+  border-color: #335059;
+  color: #f1f7f6;
+}
+
+:root[data-theme='dark'] input::placeholder { color: #8da6a4; }
+
+:root[data-theme='dark'] table thead th {
+  background: #1a2c32;
+  color: #d9ece9;
+  border-bottom-color: #2e4850;
+}
+
+:root[data-theme='dark'] table td {
+  color: #eef5f4;
+  border-bottom-color: #21363d;
+}
+
+:root[data-theme='dark'] table tbody tr:hover {
+  background: #182a30;
+}
+
+:root[data-theme='dark'] .text-button {
+  color: #5eead4;
+}
+
+:root[data-theme='dark'] .text-danger { color: #fca5a5 !important; }
+:root[data-theme='dark'] .text-warning { color: #fcd34d !important; }
+
+:root[data-theme='dark'] .pill-badge {
+  background: #134e4a !important;
+  color: #99f6e4 !important;
+  border: 1px solid #2dd4bf;
+}
+
+:root[data-theme='dark'] .local-notice,
+:root[data-theme='dark'] .mapping-warning {
+  background: #292010;
+  border-color: #78551d;
+  color: #fde68a;
+}
+:root[data-theme='dark'] .local-notice strong,
+:root[data-theme='dark'] .mapping-warning strong {
+  color: #fef3c7;
+}
+:root[data-theme='dark'] .local-notice button {
+  background: #423215;
+  color: #fde68a;
+}
+
+:root[data-theme='dark'] .task-guidance {
+  background: #12282e;
+  border-color: #27535e;
+  color: #bae6fd;
+}
+:root[data-theme='dark'] .task-guidance strong { color: #e0f2fe; }
+
+:root[data-theme='dark'] .connection-pill.is-local {
+  background: #2b2111;
+  border-color: #78551d;
+  color: #fcd34d;
+}
+:root[data-theme='dark'] .connection-pill.is-cloud {
+  background: #102b24;
+  border-color: #1f6d5c;
+  color: #6ee7b7;
+}
+
+:root[data-theme='dark'] .guide-step-num {
+  background: #134e4a;
+  color: #99f6e4;
+}
+
+:root[data-theme='dark'] .empty-inline {
+  color: #b4c8c6;
+}

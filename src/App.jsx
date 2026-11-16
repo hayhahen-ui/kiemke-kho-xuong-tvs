@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity, ArrowDownToLine, ArrowLeftRight, BookOpen, Boxes, Check, ChevronDown,
   CircleAlert, ClipboardCheck, ClipboardList, Cloud, CloudOff, FileSpreadsheet, Filter,
-  Gauge, GitBranch, Layers3, LogOut, Menu, Package, Plus, RefreshCw, Search, Settings2,
-  ShieldCheck, Upload, X,
+  Gauge, GitBranch, Layers3, LogOut, Menu, Moon, Package, Plus, RefreshCw, Search, Settings2,
+  ShieldCheck, Sun, Upload, X,
 } from 'lucide-react';
 import { PLANTS, WAREHOUSES, getInventoryRows, getPlantName, getPlantSummary, getTheoreticalRequirements, getWarehouseName, summarizeTheoreticalRequirements, inventoryKey, mergeWipProgress, money, orderKey, productKey, productMappingKey, resolveOrderCommand, statusTone } from './lib/model.js';
 import { createTaskWorkbook, importTaskWorkbook, taskFilename } from './lib/task-workbooks.js';
@@ -64,6 +64,14 @@ function App() {
   const [data, setData] = useState(() => emptyData());
   const [localLoading, setLocalLoading] = useState(!cloudMode);
   const [page, setPage] = useState('overview');
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem('kk_theme') || 'light'; } catch { return 'light'; }
+  });
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try { localStorage.setItem('kk_theme', theme); } catch {}
+  }, [theme]);
   const [selectedPlant, setSelectedPlant] = useState('LAF');
   const [selectedWarehouse, setSelectedWarehouse] = useState('HOA_MAU_LAF');
   const [session, setSession] = useState(null);
@@ -457,6 +465,14 @@ function App() {
           <button className="icon-button mobile-menu" aria-label="Mở menu" onClick={() => setMobileNavOpen(true)}><Menu size={19} /></button>
           <div className="breadcrumbs"><span>Kho xưởng</span><i>/</i><strong>{currentNav.label}</strong></div>
           <div className="topbar-actions">
+            <button
+              type="button"
+              className="button button-secondary button-small theme-toggle"
+              onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+              title={theme === 'dark' ? 'Chuyển sang chế độ Sáng' : 'Chuyển sang chế độ Tối'}
+            >
+              {theme === 'dark' ? <><Sun size={15} /> Chế độ Sáng</> : <><Moon size={15} /> Chế độ Tối</>}
+            </button>
             <span className={`connection-pill ${cloudMode ? 'is-cloud' : 'is-local'}`}>
               {cloudMode ? <Cloud size={14} /> : <CloudOff size={14} />}
               {cloudMode ? (saving ? 'Đang lưu' : 'Dữ liệu dùng chung') : 'Chế độ thiết bị'}
