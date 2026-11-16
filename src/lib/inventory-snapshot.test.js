@@ -159,3 +159,17 @@ test('mergeRowsByMaterialName combines two material codes onto one row and recal
  assert.equal(merged[0].orderCount,2);
  assert.equal(merged[0].comparison,'Đã đối chiếu');
 });
+test('downstream Gò, Đóng thùng, Nhập kho propagate backward to missing upstream Chặt/May counts',()=>{
+ const seqOrders=[
+  {orderNo:'DH_PACKED',model:'C',color:'1',plannedQty:344,productionQty:344,stageQuantities:{LAF_CUT:0,LVF_SEW:0,LVF_GO:0,RECEIVED:344}},
+  {orderNo:'DH_PARTIAL',model:'A',color:'2',plannedQty:516,productionQty:516,stageQuantities:{LAF_CUT:0,LVF_SEW:116,LVF_GO:509,RECEIVED:509}},
+ ];
+ const seqData={...data,productionOrders:seqOrders};
+ const laf=calculateInventorySnapshot(seqData,'LAF',{mode:'planned'});
+ assert.equal(laf.rows.length,1);
+ assert.equal(laf.rows[0].orderNo,'DH_PARTIAL');
+ assert.equal(laf.rows[0].done,509);
+ assert.equal(laf.rows[0].basisQty,7);
+ const chemLaf=calculateInventorySnapshot(seqData,'HOA_MAU_LAF',{mode:'planned'});
+ assert.equal(chemLaf.summary.length,0);
+});

@@ -155,9 +155,34 @@ function warehouseFromPlant(plant) {
   return '';
 }
 
+const validStageNum = (value) => (
+  value === '' || value === null || value === undefined || !Number.isFinite(Number(value)) || Number(value) < 0
+    ? null
+    : Number(value)
+);
+
+/**
+ * Sequential production flow: Chặt (LAF_CUT) -> May (LVF_SEW) -> Gò (LVF_GO) -> Đóng thùng / Nhập kho / Xuất kho.
+ * When a downstream stage has recorded > 0 pairs, upstream stages are inferred to have completed at least that many pairs.
+ */
+export function resolveEffectiveStageQuantities(stageQuantities = {}) {
+  const stages = stageQuantities || {};
+  const rawChat = validStageNum(stages.LAF_CUT);
+  const rawMay = validStageNum(stages.LVF_SEW);
+  const rawGo = validStageNum(stages.LVF_GO);
+  const downstreamCandidates = [stages.RECEIVED, stages.PACKED, stages.SHIPPED].map(validStageNum).filter((v) => v !== null);
+  const downstreamEnd = downstreamCandidates.length ? Math.max(...downstreamCandidates) : null;
+
+  const LVF_GO = downstreamEnd !== null && downstreamEnd > 0 ? Math.max(rawGo ?? 0, downstreamEnd) : rawGo;
+  const LVF_SEW = LVF_GO !== null && LVF_GO > 0 ? Math.max(rawMay ?? 0, LVF_GO) : rawMay;
+  const LAF_CUT = LVF_SEW !== null && LVF_SEW > 0 ? Math.max(rawChat ?? 0, LVF_SEW) : rawChat;
+
+  return { ...stages, LAF_CUT, LVF_SEW, LVF_GO };
+}
+
 function stageQuantity(order, operation) {
   const normalized = normalizeJoinKey(operation);
-  const stages = order.stageQuantities || {};
+  const stages = resolveEffectiveStageQuantities(order.stageQuantities);
   const releaseQty = productionOrderQuantity(order);
   if (!normalized) return releaseQty;
   let key;

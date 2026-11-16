@@ -1,4 +1,4 @@
-import { getTheoreticalRequirements, normalizeJoinKey, resolveOrderCommand, WAREHOUSES } from './model.js';
+import { getTheoreticalRequirements, normalizeJoinKey, resolveEffectiveStageQuantities, resolveOrderCommand, WAREHOUSES } from './model.js';
 
 const norm = normalizeJoinKey;
 const active = (rows, meta, task) => meta?.[task]?.batchId ? (rows || []).filter((r) => r.batchId === meta[task].batchId) : (rows || []);
@@ -73,7 +73,8 @@ export function calculateInventorySnapshot(data, warehouseId, { mode, issuedRows
       if (candidates.length === 1) qty = numberOrNull(candidates[0].quantity);
       if (candidates.length > 1) issues.push({ ...order, reason:'Trùng dòng số đôi đã lĩnh cho cùng kho/chỉ lệnh/mã hàng/màu.' });
     }
-    const done = numberOrNull(order.stageQuantities?.[stage.key]);
+    const effectiveStages = resolveEffectiveStageQuantities(order.stageQuantities);
+    const done = numberOrNull(effectiveStages?.[stage.key]);
     let remaining = 0;
     if (frequencies.get(k) > 1) {
       issues.push({...order, reason:'Trùng chỉ lệnh + mã hàng + màu trong tiến độ; chưa tính để tránh nhân đôi.'});
