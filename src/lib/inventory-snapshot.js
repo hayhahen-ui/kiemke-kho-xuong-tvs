@@ -183,22 +183,41 @@ export function compareSnapshotCounts(result, countRows, warehouseId) {
 }
 
 const SUBSCRIPT_DIGITS = { '₀':'0','₁':'1','₂':'2','₃':'3','₄':'4','₅':'5','₆':'6','₇':'7','₈':'8','₉':'9' };
+const CHEMICAL_STOP_WORDS = new Set([
+  'CHAT','TRO','XUC','TIEN','VA','LAM','MEM','PHAN','TAN','CAO','SU','TANG','DINH',
+  'CHONG','PHUN','SUONG','LUU','HOA','DON','TAO','DANG','HAT','BOT','SIEU','MAI','MON',
+  'BAT','MAU','CAM','DO','TONG','HOP','NUOC','XU','LY','VAI','DONG','CUNG','KEO',
+  'VE','SINH','PHA','BONG','MO','HE','NS',
+]);
 
 /**
- * Normalize a material name for cross-code grouping (strips accents, brackets,
- * brand suffixes like ADIDAS, subscript digits, and generic chemical prefixes).
+ * Normalize a material name for cross-code grouping by extracting its chemical
+ * signature (strips accents, brackets, ADIDAS tags, trailing (1)/(2) batch suffixes,
+ * glued Vietnamese prefixes, and generic chemical category words).
  */
 export function normalizeMaterialNameKey(name) {
   let text = String(name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D');
   text = text.replace(/[₀-₉]/g, (c) => SUBSCRIPT_DIGITS[c]).toUpperCase();
-  text = text.replace(/\bADIDAS\b/g, ' ').replace(/[\[\]\(\),;._\-\/]+/g, ' ').replace(/\s+/g, ' ').trim();
-  const words = text.split(' ').filter((w, i, arr) => w && (i === 0 || w !== arr[i - 1]));
-  let compactName = words.join('');
-  compactName = compactName
-    .replace(/^CHATTROXUCTIENVALAMMEM/, 'CHATXUCTIEN')
-    .replace(/^CHATTROPHANTAN/, 'CHATPHANTAN')
-    .replace(/^CHATTRO/, 'CHAT');
-  return compactName;
+  text = text.replace(/\(?\s*ADIDAS\s*\)?/g, ' ').replace(/\(\d+\)\s*$/g, ' ');
+  text = text.replace(/[\[\]\(\),;._#\/]+/g, ' ');
+  text = text
+    .replace(/CAO\s*SU(?=[A-Z0-9])/g, 'CAO SU ')
+    .replace(/MEM(?=[A-Z0-9])/g, 'MEM ')
+    .replace(/TAN(?=[A-Z0-9])/g, 'TAN ')
+    .replace(/MAU(?=[A-Z0-9])/g, 'MAU ')
+    .replace(/CAM\s*DO(?=[A-Z0-9])/g, 'CAM DO ')
+    .replace(/BOT(?=[A-Z0-9])/g, 'BOT ')
+    .replace(/(\d)(CHAT)/g, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const rawTokens = text.split(' ').map((w) => w.replace(/-/g, '')).filter(Boolean);
+  const sig = rawTokens.filter((w, i, arr) => !CHEMICAL_STOP_WORDS.has(w) && (i === 0 || w !== arr[i - 1]));
+  if (sig.length) {
+    const codes = sig.filter((w) => /[A-Z]/.test(w) && /\d/.test(w));
+    if (codes.length) return codes.join('');
+    return sig.join('');
+  }
+  return rawTokens.join('');
 }
 
 /**

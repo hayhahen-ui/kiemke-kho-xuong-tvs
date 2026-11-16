@@ -140,6 +140,10 @@ test('factory LVF combined view only sums BOM lines allocated to their stage',()
 test('normalizeMaterialNameKey matches equivalent ADIDAS and standard names without false collisions',()=>{
  assert.equal(normalizeMaterialNameKey('CAO SU3L'), normalizeMaterialNameKey('Cao su [3L]  ADIDAS'));
  assert.equal(normalizeMaterialNameKey('CAO SUSBR-1502'), normalizeMaterialNameKey('Cao su [SBR-1502] ADIDAS'));
+ assert.equal(normalizeMaterialNameKey('CAO SU KBR01(2)'), normalizeMaterialNameKey('Cao su [Cao su KBR01] ADIDAS'));
+ assert.equal(normalizeMaterialNameKey('BÁT MÀURB-2124A'), normalizeMaterialNameKey('BÁT MÀU CAM ĐỎ RB-2124A (ADIDAS)'));
+ assert.equal(normalizeMaterialNameKey('CHẤT TRỢ XÚC TIẾN VÀ LÀM MỀMKUMANOX'), normalizeMaterialNameKey('CHẤT TRỢ XÚC TIẾN VÀ LÀM MỀM KUMANOX DẠNG BỘTADIDAS'));
+ assert.equal(normalizeMaterialNameKey('CHẤT TRỢ XÚC TIẾN VÀ LÀM MỀM UF440CHẤT PHÂN TÁN CAO SU'), normalizeMaterialNameKey('CHẤT TRỢ XÚC TIẾN VÀ LÀM MỀM CHẤT PHÂN TÁN CAO SU UF440ADIDAS'));
  assert.equal(normalizeMaterialNameKey('CHẤT TRỢ XÚC TIẾN VÀ LÀM MỀM B75 NS'), normalizeMaterialNameKey('CHẤT XÚC TIẾN B75 NS ADIDAS'));
  assert.notEqual(normalizeMaterialNameKey('DẦU TCM LIQUID 1500'), normalizeMaterialNameKey('DẦU TCM LIQUID 220N ADIDAS'));
 });
