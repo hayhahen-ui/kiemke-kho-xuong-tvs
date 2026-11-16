@@ -810,10 +810,21 @@ table td small { font-size: 12px; color: var(--muted); }
 .table-footnote { font-size: 12.5px; color: var(--muted); }
 
 .mindmap-node span, .mindmap-branch-head span, .mindmap-wh-chip span,
-.guide-step-file, .guide-step-card p, .sitemap-card span { font-size: 12px; color: var(--muted); }
+.mm-node span, .mm-stage-box span, .mm-hub-card p, .mm-hub-stats span,
+.guide-step-file, .guide-step-card p, .sitemap-card span { font-size: 12.5px; color: var(--muted); }
 .mindmap-node strong, .mindmap-branch-head strong, .mindmap-wh-chip strong,
-.guide-step-head strong, .sitemap-card strong { font-size: 13.5px; color: var(--ink); }
-.guide-step-num { font-size: 11px; }
+.mm-node strong, .mm-stage-box strong,
+.guide-step-head strong, .sitemap-card strong { font-size: 14px; color: var(--ink); }
+.mm-group-title { font-size: 11.5px; color: #3d5a5c; }
+.mm-hub-badge { font-size: 11px; }
+.mm-hub-card h3 { font-size: 17px; }
+.mm-hub-card p { color: #d8f2ec; }
+.mm-hub-stats span { color: #ffffff; }
+.guide-step-num, .period-badge { font-size: 11.5px; }
+.status-badge, .delta-badge, .product-code, .alert-count { font-size: 12px; }
+.cell-input, .select-compact { font-size: 13px; min-height: 34px; }
+.metric-card span, .metric-card small { font-size: 12.5px; }
+.metric-card strong { font-size: 25px; }
 
 :root[data-theme='dark'] {
   color-scheme: dark;
@@ -848,15 +859,118 @@ table td small { font-size: 12px; color: var(--muted); }
 
 :root[data-theme='dark'] .panel,
 :root[data-theme='dark'] .summary-card,
+:root[data-theme='dark'] .metric-card,
 :root[data-theme='dark'] .metric-inline,
 :root[data-theme='dark'] .warehouse-overview-card,
 :root[data-theme='dark'] .modal-card,
 :root[data-theme='dark'] .guide-step-card,
 :root[data-theme='dark'] .sitemap-card,
 :root[data-theme='dark'] .mindmap-node,
-:root[data-theme='dark'] .mindmap-branch {
+:root[data-theme='dark'] .mindmap-branch,
+:root[data-theme='dark'] .mm-node,
+:root[data-theme='dark'] .mm-stage-box {
   background: #132025;
   border-color: #294149;
+  color: #f1f7f6;
+}
+
+:root[data-theme='dark'] .mindmap-canvas {
+  background: #0d181c;
+  border-color: #2b454d;
+}
+
+:root[data-theme='dark'] .mm-group-title {
+  color: #9fd0c9;
+}
+
+:root[data-theme='dark'] .mm-node:hover {
+  background: #1a2f36;
+  border-color: #38bdf8;
+}
+
+:root[data-theme='dark'] .mm-node span,
+:root[data-theme='dark'] .mm-stage-box span,
+:root[data-theme='dark'] .guide-step-card p,
+:root[data-theme='dark'] .sitemap-card span {
+  color: #c2d6d4;
+}
+
+:root[data-theme='dark'] .mm-node strong,
+:root[data-theme='dark'] .mm-stage-box strong,
+:root[data-theme='dark'] .guide-step-head strong,
+:root[data-theme='dark'] .sitemap-card strong {
+  color: #f4f9f8;
+}
+
+:root[data-theme='dark'] .mm-hub-card p {
+  color: #dff5ef;
+}
+
+:root[data-theme='dark'] .period-badge,
+:root[data-theme='dark'] .table-footnote {
+  background: #192b31;
+  border-color: #2e4850;
+  color: #cde0de;
+}
+
+:root[data-theme='dark'] .plant-tabs button b {
+  background: #233b42;
+  color: #e6f1ef;
+}
+
+:root[data-theme='dark'] .bar-track,
+:root[data-theme='dark'] .progress-track,
+:root[data-theme='dark'] .mini-meter {
+  background: #1e333a;
+}
+
+:root[data-theme='dark'] .product-code {
+  background: #1a3538;
+  color: #99f6e4;
+}
+
+:root[data-theme='dark'] .status-badge.success,
+:root[data-theme='dark'] .delta-badge.positive {
+  background: #123828;
+  color: #86efac;
+}
+:root[data-theme='dark'] .status-badge.warning {
+  background: #362811;
+  color: #fde68a;
+}
+:root[data-theme='dark'] .status-badge.danger,
+:root[data-theme='dark'] .delta-badge.negative,
+:root[data-theme='dark'] .alert-count,
+:root[data-theme='dark'] .alert-symbol {
+  background: #3b1919;
+  color: #fca5a5;
+}
+:root[data-theme='dark'] .status-badge.info {
+  background: #152d44;
+  color: #93c5fd;
+}
+:root[data-theme='dark'] .status-badge.muted {
+  background: #1f3035;
+  color: #cbd5e1;
+}
+
+:root[data-theme='dark'] .reconcile-icon {
+  background: #143632;
+  color: #5eead4;
+}
+:root[data-theme='dark'] .reconcile-icon.wip {
+  background: #152d44;
+  color: #93c5fd;
+}
+:root[data-theme='dark'] .reconcile-icon.count {
+  background: #362811;
+  color: #fcd34d;
+}
+
+:root[data-theme='dark'] .select-compact,
+:root[data-theme='dark'] .cell-input {
+  background: #0e191d;
+  border-color: #335059;
   color: #f1f7f6;
 }
 
