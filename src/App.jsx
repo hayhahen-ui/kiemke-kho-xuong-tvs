@@ -10,7 +10,7 @@ import { createTaskWorkbook, importTaskWorkbook, taskFilename } from './lib/task
 import { loadLocalState, saveLocalState } from './lib/local-db.js';
 import { supabase, cloudMode } from './lib/supabase.js';
 import { ensureWorkspace, loadWorkspaceRecords, saveWorkspaceRecords } from './lib/cloud.js';
-import { calculateInventorySnapshot, readIssuedWorkbook, createIssuedTemplate, createSnapshotWorkbook, readCountWorkbook, readWorkshopCounts, createCountTemplate, compareSnapshotCounts, mergeRowsByMaterialName, readMaterialIssueWorkbook, buildStageExplanationRows, classifyWarehouseIssues } from './lib/inventory-snapshot.js';
+import { calculateInventorySnapshot, readIssuedWorkbook, createIssuedTemplate, createSnapshotWorkbook, readCountWorkbook, readWorkshopCounts, createCountTemplate, compareSnapshotCounts, mergeRowsByMaterialName, readMaterialIssueWorkbook, readBomDemandWorkbook, buildStageExplanationRows, classifyWarehouseIssues } from './lib/inventory-snapshot.js';
 import { fetchRealDataBundle } from './lib/real-data.js';
 
 const emptyData = () => ({ materials: [], bom: [], orders: [], productionOrders: [], productMappings: [], orderMappings: [], chemicalNorms: [], importMeta: {}, inventory: {}, norms: [], workshopCounts: null, materialIssues: [] });
@@ -94,11 +94,24 @@ function App() {
         if (!alive) return;
         const hasAnyData = (saved.productionOrders?.length || 0) > 0 || (saved.materials?.length || 0) > 0;
         if (hasAnyData) {
-          if (!(saved.materialIssues?.length)) {
+          if (!(saved.materialIssues?.length) || !saved.importMeta?.['chemical-norms:LVF']) {
             try {
               const bundled = await fetchRealDataBundle();
-              if (alive && bundled.materialIssues?.length) {
-                const updated = { ...saved, materialIssues: bundled.materialIssues };
+              if (alive && (bundled.materialIssues?.length || bundled.chemicalNorms?.length)) {
+                const updated = {
+                  ...saved,
+                  materialIssues: saved.materialIssues?.length ? saved.materialIssues : (bundled.materialIssues || []),
+                  chemicalNorms: (!saved.importMeta?.['chemical-norms:LVF'] && bundled.chemicalNorms?.length) ? bundled.chemicalNorms : (saved.chemicalNorms || []),
+                  importMeta: {
+                    ...(bundled.importMeta || {}),
+                    ...(saved.importMeta || {}),
+                    ...((!saved.importMeta?.['chemical-norms:LVF'] && bundled.importMeta) ? {
+                      'chemical-norms:HOA_MAU_LVF': bundled.importMeta['chemical-norms:HOA_MAU_LVF'],
+                      'chemical-norms:LAF': bundled.importMeta['chemical-norms:LAF'],
+                      'chemical-norms:LVF': bundled.importMeta['chemical-norms:LVF'],
+                    } : {}),
+                  },
+                };
                 await saveLocalState(updated);
                 setData(updated);
                 return;
@@ -470,6 +483,25 @@ function App() {
     await commit(next, ['material_issue', 'import_meta']);
   };
 
+  const saveBomDemand = async (bomRows, sourceName) => {
+    const importedWarehouses = new Set(['HOA_MAU_LVF', 'LAF', 'LVF']);
+    const kept = (data.chemicalNorms || []).filter((r) => !importedWarehouses.has(r.warehouseId));
+    const nextNorms = [...kept, ...bomRows];
+    const now = new Date().toISOString();
+    const countOf = (wh) => bomRows.filter((r) => r.warehouseId === wh).length;
+    const next = {
+      ...data,
+      chemicalNorms: nextNorms,
+      importMeta: {
+        ...data.importMeta,
+        'chemical-norms:HOA_MAU_LVF': { taskId: 'chemical-norms:HOA_MAU_LVF', sourceFile: sourceName, importedAt: now, rowCount: countOf('HOA_MAU_LVF') },
+        'chemical-norms:LAF': { taskId: 'chemical-norms:LAF', sourceFile: sourceName, importedAt: now, rowCount: countOf('LAF') },
+        'chemical-norms:LVF': { taskId: 'chemical-norms:LVF', sourceFile: sourceName, importedAt: now, rowCount: countOf('LVF') },
+      },
+    };
+    await commit(next, ['chemical_norm', 'import_meta']);
+  };
+
   const signOut = async () => { if (supabase) await supabase.auth.signOut(); };
 
   if (!cloudMode && localLoading) return <LoadingScreen label="Đang tải dữ liệu kho xưởng" />;
@@ -521,7 +553,7 @@ function App() {
           {page === 'overview' && <Dashboard data={data} setPage={setPageSafe} onOpenWarehouse={openWarehouseSnapshot} />}
           {page === 'guide' && <GuidePage data={data} setPage={setPageSafe} onOpenWarehouse={openWarehouseSnapshot} />}
           {page === 'orders' && <OrdersPage data={data} onAdd={() => setModal('order')} onProgress={updateOrderProgress} />}
-          {page === 'snapshot' && <SnapshotPage data={data} selectedWarehouse={selectedWarehouse} setWarehouse={setSelectedWarehouse} onSaveCounts={saveWorkshopCounts} onSaveMaterialIssues={saveMaterialIssues} />}
+          {page === 'snapshot' && <SnapshotPage data={data} selectedWarehouse={selectedWarehouse} setWarehouse={setSelectedWarehouse} onSaveCounts={saveWorkshopCounts} onSaveMaterialIssues={saveMaterialIssues} onSaveBomDemand={saveBomDemand} />}
           {page === 'requirements' && <RequirementsPage data={data} selectedWarehouse={selectedWarehouse} setWarehouse={setSelectedWarehouse} onExport={exportTask} onImport={importTask} busyTask={busyTask} />}
           {page === 'inventory' && <InventoryPage data={data} rows={currentRows} selectedPlant={selectedPlant} setPlant={setSelectedPlant} onUpdate={updateInventory} />}
           {page === 'catalog' && <CatalogPage data={data} tab={catalogTab} setTab={setCatalogTab} onAddMaterial={() => setModal('material')} onAddBom={() => setModal('bom')} />}
@@ -1103,7 +1135,7 @@ function InventoryPage({ data, rows, selectedPlant, setPlant, onUpdate }) {
   </>;
 }
 
-function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts, onSaveMaterialIssues }) {
+function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts, onSaveMaterialIssues, onSaveBomDemand }) {
   const localNow = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
   const [asOf, setAsOf] = useState(localNow);
   const [mode, setMode] = useState('planned');
@@ -1146,6 +1178,7 @@ function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts, onS
   const importCount = async (file) => { try { const rows=await readCountWorkbook(file); const payload = { rows, warnings: [], dates: null }; setCustomCounts({ rows, file: file.name, notes: null }); if (onSaveCounts) await onSaveCounts(payload); setError(''); } catch(e) { setError(e.message || 'Không đọc được file kiểm đếm.');} };
   const importWorkshopCounts = async (file) => { try { const result=await readWorkshopCounts(file); setCustomCounts({ rows: result.rows, file: file.name, notes: result }); if (onSaveCounts) await onSaveCounts(result); setError(''); } catch(e) { setError(e.message || 'Không đọc được workbook thống kê.');} };
   const importMaterialIssues = async (file) => { try { const result=await readMaterialIssueWorkbook(file); if (onSaveMaterialIssues) await onSaveMaterialIssues(result.rows, file.name); setError(''); } catch(e) { setError(e.message || 'Không đọc được file thực xuất kho tổng.'); } };
+  const importBomDemand = async (file) => { try { const result=await readBomDemandWorkbook(file, { workshopCounts: data.workshopCounts?.rows || [], materialIssues, materials: data.materials || [] }); if (onSaveBomDemand) await onSaveBomDemand(result.rows, file.name); setError(''); } catch(e) { setError(e.message || 'Không đọc được file DM nhu cầu theo BOM.'); } };
   const updateManualCount = async (row, rawValue) => {
     const trimmed = String(rawValue ?? '').trim();
     const numericVal = trimmed === '' ? null : Number(trimmed.replace(',', '.'));
@@ -1175,6 +1208,7 @@ function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts, onS
       {mode === 'issued' && <div><label className="button button-secondary button-small upload-control"><Upload size={14}/> Nhập file số đôi đã lĩnh<input type="file" accept=".xlsx" onChange={e=>{const f=e.target.files?.[0]; if(f)importIssued(f); e.target.value='';}}/></label> <button className="text-button" onClick={async()=>download(await createIssuedTemplate(),'Mau_So_Doi_Da_Linh.xlsx')}>Tải mẫu</button><p>{issuedFile ? `${issuedFile} · ${issuedRows.length} dòng` : 'Chưa nạp file số đôi đã lĩnh.'}</p></div>}
       <div className="field-span" style={{display:'flex',flexWrap:'wrap',gap:10,alignItems:'center'}}>
         <label className="button button-secondary button-small upload-control"><Upload size={14}/> Import Thực xuất kho tổng (theo PO)<input type="file" accept=".xlsx,.xlsm" onChange={e=>{const f=e.target.files?.[0]; if(f)importMaterialIssues(f); e.target.value='';}}/></label>
+        <label className="button button-secondary button-small upload-control"><Upload size={14}/> Import DM Nhu cầu theo BOM (AE/AF)<input type="file" accept=".xlsx,.xlsm" onChange={e=>{const f=e.target.files?.[0]; if(f)importBomDemand(f); e.target.value='';}}/></label>
         <label className="button button-secondary button-small upload-control"><Upload size={14}/> Nhập kiểm đếm (file mẫu)<input type="file" accept=".xlsx" onChange={e=>{const f=e.target.files?.[0]; if(f)importCount(f); e.target.value='';}}/></label>
         <button className="text-button" onClick={async()=>download(await createCountTemplate(),'Mau_Kiem_Dem.xlsx')}>Tải mẫu</button>
         <label className="button button-secondary button-small upload-control"><Upload size={14}/> Nhập đếm từ workbook thống kê 4 kho<input type="file" accept=".xlsx,.xlsm" onChange={e=>{const f=e.target.files?.[0]; if(f)importWorkshopCounts(f); e.target.value='';}}/></label>

@@ -235,3 +235,30 @@ test('TongHop issued column counts only WIP POs; ThucLanh_SoVoi_LyThuyet splits 
  assert.equal(r.getCell('I2').value,100);
  assert.equal(r.getCell('J2').value,-40);
 });
+test('calculateInventorySnapshot uses per-order chemicalNorms for LAF and LVF (both mode)',()=>{
+ const customData={
+  ...data,
+  productionOrders:[
+   {orderNo:'DH_BOM',purchaseOrder:'PO_BOM',model:'M_BOM',color:'X',plannedQty:100,productionQty:100,stageQuantities:{LAF_CUT:60,LVF_SEW:30,LVF_GO:10,PACKED:0,RECEIVED:0}},
+  ],
+  chemicalNorms:[
+   {warehouseId:'LAF',productionOrder:'DH_BOM',purchaseOrder:'PO_BOM',model:'M_BOM',color:'X',materialCode:'MAT_CUT',materialName:'Vải lót',unit:'M',operation:'Chặt',sourceOrderQty:100,sourceQuantity:200},
+   {warehouseId:'LVF',productionOrder:'DH_BOM',purchaseOrder:'PO_BOM',model:'M_BOM',color:'X',materialCode:'MAT_SEW',materialName:'Chỉ may',unit:'M',operation:'May',sourceOrderQty:100,sourceQuantity:150},
+   {warehouseId:'LVF',productionOrder:'DH_BOM',purchaseOrder:'PO_BOM',model:'M_BOM',color:'X',materialCode:'MAT_GO',materialName:'Keo gò',unit:'KG',operation:'Gò',sourceOrderQty:100,sourceQuantity:50},
+  ],
+ };
+ const laf=calculateInventorySnapshot(customData,'LAF',{mode:'planned'});
+ assert.equal(laf.hasSource,true);
+ assert.equal(laf.rows.length,1);
+ assert.equal(laf.rows[0].basisQty,40);
+ assert.equal(laf.rows[0].quantity,80);
+ const lvf=calculateInventorySnapshot(customData,'LVF',{mode:'planned',lvfStage:'both'});
+ assert.equal(lvf.hasSource,true);
+ assert.equal(lvf.rows.length,2);
+ const sewRow=lvf.rows.find((x)=>x.materialCode==='MAT_SEW');
+ const goRow=lvf.rows.find((x)=>x.materialCode==='MAT_GO');
+ assert.equal(sewRow.basisQty,70);
+ assert.equal(sewRow.quantity,105);
+ assert.equal(goRow.basisQty,90);
+ assert.equal(goRow.quantity,45);
+});

@@ -268,6 +268,53 @@ export function getTheoreticalRequirements(data, warehouseId) {
     return { rows: result.filter((row) => row.quantity > 0), unmapped, hasSource: chemicalRows.length > 0 };
   }
 
+  const orderBomRows = warehouse.kind === 'factory'
+    ? activeRows(data.chemicalNorms, data.importMeta, taskId).filter((row) => row.warehouseId === warehouseId)
+    : [];
+  const orderBomCoveredOrders = new Set();
+  for (const norm of orderBomRows) {
+    const candidates = resolvedOrders.get(commandProductKey(norm.productionOrder, norm)) || [];
+    if (candidates.length !== 1) {
+      unmapped.push({ ...norm, reason: candidates.length > 1
+        ? `Có ${candidates.length} dòng tiến độ cùng khớp chỉ lệnh + mã hàng + màu; cần đối chiếu.`
+        : 'Không ghép duy nhất: thiếu dòng tiến độ tương ứng trong TIEN-DO-SX-DONHANG.' });
+      continue;
+    }
+    const order = candidates[0];
+    const sourceQty = Number(norm.sourceOrderQty) || 0;
+    const releasedQty = productionOrderQuantity(order);
+    if (!(sourceQty > 0) || !Number.isFinite(Number(norm.sourceQuantity)) || Number(norm.sourceQuantity) < 0) continue;
+    orderBomCoveredOrders.add(commandProductKey(order.orderNo, order));
+    if (releasedQty <= 0) continue;
+    const basisQty = norm.operation ? stageQuantity(order, norm.operation) : releasedQty;
+    if (basisQty === null) {
+      unmapped.push({ orderNo: order.orderNo, model: order.model, color: order.color, materialCode: norm.materialCode || '', materialName: norm.materialName || '', reason: 'Công đoạn không xác định hoặc tiến độ thiếu/không hợp lệ; cần đối chiếu.' });
+      continue;
+    }
+    if (basisQty <= 0) continue;
+    const rate = Number(norm.sourceQuantity) / sourceQty;
+    result.push({
+      warehouseId,
+      sourceType: 'order-bom',
+      orderNo: norm.productionOrder,
+      purchaseOrder: order.purchaseOrder || norm.purchaseOrder || '',
+      model: order.model,
+      color: order.color,
+      component: norm.operation || norm.component || 'DM NHU CAU THEO BOM',
+      formulaName: norm.formulaName || '',
+      materialCode: norm.materialCode || '',
+      materialName: norm.materialName || '',
+      unit: norm.unit || '',
+      specification: norm.specification || '',
+      rate,
+      basisQty,
+      quantity: rate * basisQty,
+      sourceOrderQty: sourceQty,
+      source: norm.sourceFile || 'DM NHU CAU THEO BOM',
+      sourceRow: norm.sourceRow,
+    });
+  }
+
   const chemicalCodes = new Set(chemicalRows.map((row) => normalizeJoinKey(row.materialCode)).filter(Boolean));
   const colorCodesByOrder = new Map();
   for (const row of chemicalRows) {
@@ -336,6 +383,7 @@ export function getTheoreticalRequirements(data, warehouseId) {
       }
     }
     if (!bomLines.size && (data.bom || []).length) {
+      if (orderBomCoveredOrders.has(commandProductKey(order.orderNo, order))) continue;
       unmapped.push({
         orderNo: order.orderNo,
         model: order.model,
@@ -395,9 +443,9 @@ export function getTheoreticalRequirements(data, warehouseId) {
         sourceRow: line.sourceRow,
       });
     }
-    if (data._snapshotStrictCoverage && !hasTargetLine) unmapped.push({orderNo:order.orderNo,model:order.model,color:order.color,reason:'Có mã hàng-màu trong BOM nhưng chưa có dòng định mức trực tiếp xác định cho kho này; không kết luận bằng 0.'});
+    if (data._snapshotStrictCoverage && !hasTargetLine && !orderBomCoveredOrders.has(commandProductKey(order.orderNo, order))) unmapped.push({orderNo:order.orderNo,model:order.model,color:order.color,reason:'Có mã hàng-màu trong BOM nhưng chưa có dòng định mức trực tiếp xác định cho kho này; không kết luận bằng 0.'});
   }
-  return { rows: result.filter((row) => row.quantity > 0), unmapped, hasSource: mappedSourceLocations.has(warehouseId) };
+  return { rows: result.filter((row) => row.quantity > 0), unmapped, hasSource: orderBomRows.length > 0 || mappedSourceLocations.has(warehouseId) };
 }
 
 export function summarizeTheoreticalRequirements(rows) {
