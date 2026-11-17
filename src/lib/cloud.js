@@ -1,6 +1,6 @@
 import { inventoryKey, orderKey, productMappingKey } from './model.js';
 
-const TYPES = ['material', 'bom', 'order', 'inventory', 'norm', 'production_order', 'product_mapping', 'chemical_norm', 'import_meta'];
+const TYPES = ['material', 'bom', 'order', 'inventory', 'norm', 'production_order', 'product_mapping', 'chemical_norm', 'import_meta', 'workshop_count', 'material_issue'];
 
 export async function ensureWorkspace(client) {
   const { data: memberships, error } = await client
@@ -29,7 +29,8 @@ export async function loadWorkspaceRecords(client, workspaceId) {
     all.push(...(data || []));
     if (!data || data.length < 1000) break;
   }
-  const state = { materials: [], bom: [], orders: [], productionOrders: [], productMappings: [], orderMappings: [], chemicalNorms: [], importMeta: {}, inventory: {}, norms: [] };
+  const state = { materials: [], bom: [], orders: [], productionOrders: [], productMappings: [], orderMappings: [], chemicalNorms: [], importMeta: {}, inventory: {}, norms: [], workshopCounts: null, materialIssues: [] };
+  const workshopRows = [];
   for (const row of all) {
     if (row.entity_type === 'material') state.materials.push(row.payload);
     if (row.entity_type === 'bom') state.bom.push(row.payload);
@@ -38,6 +39,8 @@ export async function loadWorkspaceRecords(client, workspaceId) {
     if (row.entity_type === 'production_order') state.productionOrders.push(row.payload);
     if (row.entity_type === 'product_mapping') state.productMappings.push(row.payload);
     if (row.entity_type === 'chemical_norm') state.chemicalNorms.push(row.payload);
+    if (row.entity_type === 'workshop_count') workshopRows.push(row.payload);
+    if (row.entity_type === 'material_issue') state.materialIssues.push(row.payload);
     if (row.entity_type === 'import_meta') {
       state.importMeta[row.payload.taskId] = row.payload;
       if (row.payload.taskId === 'order-mapping') state.orderMappings = row.payload.orderMappings || [];
@@ -47,12 +50,19 @@ export async function loadWorkspaceRecords(client, workspaceId) {
       state.inventory[inventoryKey(item.plant, item.catalogNo)] = item;
     }
   }
+  if (workshopRows.length || state.importMeta['workshop-counts']) {
+    state.workshopCounts = {
+      rows: workshopRows,
+      warnings: state.importMeta['workshop-counts']?.warnings || [],
+      dates: state.importMeta['workshop-counts']?.dates || null,
+    };
+  }
   return state;
 }
 
-function keyFor(type, item) {
+export function keyFor(type, item) {
   if (type === 'material') return String(item.catalogNo);
-  if (type === 'bom') return `${item.catalogNo}|${item.plant || 'ALL'}|${item.productKey}|${item.size || ''}|${item.process || ''}`;
+  if (type === 'bom') return `${item.catalogNo}|${item.plant || 'ALL'}|${item.warehouseId || ''}|${item.productKey}|${item.operation || ''}|${item.supplyRoute || ''}|${item.size || ''}|${item.process || ''}`;
   if (type === 'order') return orderKey(item);
   if (type === 'inventory') return inventoryKey(item.plant, item.catalogNo);
   if (type === 'norm') return `${item.catalogNo}|${item.productKey}|${item.size}|${item.process}|${item.btpCode || ''}${item.sourceRow ? '|row:' + item.sourceRow : ''}`;
@@ -60,6 +70,8 @@ function keyFor(type, item) {
   if (type === 'product_mapping') return productMappingKey(item);
   if (type === 'chemical_norm') return `${item.warehouseId}|${item.batchId || 'legacy'}|${item.sourceRow || crypto.randomUUID()}`;
   if (type === 'import_meta') return item.taskId;
+  if (type === 'workshop_count') return `${item.warehouseId}|${item.materialCode}|${item.unit}`;
+  if (type === 'material_issue') return `${item.warehouseId}|${item.po || ''}|${item.stage || ''}|${item.materialCode}|${item.unit || ''}`;
   return crypto.randomUUID();
 }
 
@@ -71,6 +83,8 @@ export async function saveWorkspaceRecords(client, workspaceId, userId, payload,
     if (type === 'production_order') items = payload.productionOrders || [];
     if (type === 'product_mapping') items = payload.productMappings || [];
     if (type === 'chemical_norm') items = payload.chemicalNorms || [];
+    if (type === 'workshop_count') items = payload.workshopCounts?.rows || [];
+    if (type === 'material_issue') items = payload.materialIssues || [];
     if (type === 'import_meta') items = Object.values(payload.importMeta || {});
     if (!items.length) continue;
     const rows = items.map((item) => ({

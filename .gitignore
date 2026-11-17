@@ -10,3 +10,7 @@ dist/
 *.zip
 *.bak
 npm-debug.log*
+private-data/
+DU LIEU THAT/
+
+.vercel

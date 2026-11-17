@@ -441,11 +441,21 @@ function App() {
   };
 
   const saveWorkshopCounts = async (workshopCounts) => {
-    const next = { ...data, workshopCounts };
-    if (!cloudMode) {
-      await saveLocalState(next);
-    }
-    setData(next);
+    const next = {
+      ...data,
+      workshopCounts,
+      importMeta: {
+        ...data.importMeta,
+        'workshop-counts': {
+          taskId: 'workshop-counts',
+          dates: workshopCounts?.dates || null,
+          warnings: workshopCounts?.warnings || [],
+          importedAt: new Date().toISOString(),
+          rowCount: workshopCounts?.rows?.length || 0,
+        },
+      },
+    };
+    await commit(next, ['workshop_count', 'import_meta']);
   };
 
   const saveMaterialIssues = async (materialIssues, sourceName) => {
@@ -457,10 +467,7 @@ function App() {
         'material-issues': { taskId: 'material-issues', sourceFile: sourceName, importedAt: new Date().toISOString(), rowCount: materialIssues.length },
       },
     };
-    if (!cloudMode) {
-      await saveLocalState(next);
-    }
-    setData(next);
+    await commit(next, ['material_issue', 'import_meta']);
   };
 
   const signOut = async () => { if (supabase) await supabase.auth.signOut(); };
@@ -714,10 +721,19 @@ function Dashboard({ data, setPage, onOpenWarehouse }) {
       const merged = mergeRowsByMaterialName(cmp);
       const counted = merged.filter((r) => r.actual !== null && r.actual !== undefined).length;
       const withVariance = merged.filter((r) => r.variance !== null && r.variance !== undefined && Math.abs(r.variance) > 0.0001);
-      const theoryTotal = merged.reduce((s, r) => s + (Number(r.quantity) || 0), 0);
-      const issuedWipTotal = merged.reduce((s, r) => s + (Number(r.issuedFromMain) || 0), 0);
-      const actualTotal = merged.reduce((s, r) => s + (Number(r.actual) || 0), 0);
-      return { ...info, ...spec, snap, merged, counted, withVariance, theoryTotal, issuedWipTotal, actualTotal };
+      const coveragePct = merged.length ? Math.round((counted / merged.length) * 100) : 0;
+      const byUnit = new Map();
+      for (const r of merged) {
+        const u = String(r.unit || 'Khác').trim();
+        if (!byUnit.has(u)) byUnit.set(u, { unit: u, theory: 0, issued: 0, actual: 0 });
+        const b = byUnit.get(u);
+        b.theory += Number(r.quantity) || 0;
+        b.issued += Number(r.issuedFromMain) || 0;
+        b.actual += Number(r.actual) || 0;
+      }
+      const unitStats = [...byUnit.values()].sort((a, b) => (b.theory + b.actual) - (a.theory + a.actual));
+      const hasTheorySource = snap.hasSource && snap.summary.length > 0;
+      return { ...info, ...spec, snap, merged, counted, withVariance, coveragePct, unitStats, hasTheorySource };
     });
   }, [data, countRows, materialIssues]);
 
@@ -773,8 +789,6 @@ function Dashboard({ data, setPage, onOpenWarehouse }) {
     return items.sort((a, b) => Math.abs(b.variance || 0) - Math.abs(a.variance || 0)).slice(0, 6);
   }, [warehouseSnapshots]);
 
-  const maxWhVal = Math.max(1, ...warehouseSnapshots.map((w) => Math.max(w.theoryTotal, w.issuedWipTotal, w.actualTotal)));
-
   return (
     <>
       <div className="page-heading">
@@ -811,32 +825,43 @@ function Dashboard({ data, setPage, onOpenWarehouse }) {
         <section className="panel" style={{ padding: 20 }}>
           <div className="panel-heading" style={{ padding: '0 0 12px' }}>
             <div>
-              <h2>So sánh 3 chỉ số theo từng kho (Định mức · Kho tổng · Thực đếm)</h2>
-              <p>Bấm vào từng kho để đi thẳng vào bảng kiểm kê chi tiết</p>
+              <h2>Độ phủ & Tồn theo từng ĐVT trên 4 Kho</h2>
+              <p>Tách riêng theo từng đơn vị tính (không cộng gộp KÍ, mét, TỜ, CUỘN…); cảnh báo kho chưa đủ nguồn</p>
             </div>
             <button className="text-button" onClick={() => setPage('snapshot')}>Chi tiết <span>→</span></button>
           </div>
           <div className="exec-bar-list">
-            {warehouseSnapshots.map((wh) => (
-              <button type="button" key={wh.id} className="exec-bar-card" onClick={() => onOpenWarehouse(wh.id)}>
-                <div className="exec-bar-head">
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span className={`plant-dot ${wh.color}`} />
-                    <strong>{wh.name}</strong>
-                  </span>
-                  <span className="period-badge">{wh.stageLabel}</span>
-                </div>
-                <div className="exec-bars-stack">
-                  <div className="exec-mini-bar"><span>Định mức</span><div><i style={{ width: `${Math.min(100, (wh.theoryTotal / maxWhVal) * 100)}%`, background: '#0ea5e9' }} /></div><b>{money(wh.theoryTotal, 0)}</b></div>
-                  <div className="exec-mini-bar"><span>Kho tổng</span><div><i style={{ width: `${Math.min(100, (wh.issuedWipTotal / maxWhVal) * 100)}%`, background: '#f59e0b' }} /></div><b>{money(wh.issuedWipTotal, 0)}</b></div>
-                  <div className="exec-mini-bar"><span>Thực đếm</span><div><i style={{ width: `${Math.min(100, (wh.actualTotal / maxWhVal) * 100)}%`, background: '#10b981' }} /></div><b>{money(wh.actualTotal, 0)}</b></div>
-                </div>
-                <div className="exec-bar-foot">
-                  <span>{money(wh.counted)} / {money(wh.merged.length)} nhóm đã đếm</span>
-                  <span className={wh.snap.unmapped.length ? 'text-warning' : ''}>{money(wh.snap.unmapped.length)} chưa ghép</span>
-                </div>
-              </button>
-            ))}
+            {warehouseSnapshots.map((wh) => {
+              const primary = wh.unitStats[0];
+              const maxUnit = primary ? Math.max(1, primary.theory, primary.issued, primary.actual) : 1;
+              return (
+                <button type="button" key={wh.id} className="exec-bar-card" onClick={() => onOpenWarehouse(wh.id)}>
+                  <div className="exec-bar-head">
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span className={`plant-dot ${wh.color}`} />
+                      <strong>{wh.name}</strong>
+                    </span>
+                    <span className="period-badge">{wh.stageLabel}</span>
+                  </div>
+                  {!wh.hasTheorySource ? (
+                    <div className="mapping-warning" style={{ margin: 0, padding: '6px 9px', fontSize: 12 }}>
+                      <CircleAlert size={14} />
+                      <span>Chưa đủ nguồn định mức / công đoạn để đối chiếu</span>
+                    </div>
+                  ) : primary ? (
+                    <div className="exec-bars-stack">
+                      <div className="exec-mini-bar"><span>Định mức ({primary.unit})</span><div><i style={{ width: `${Math.min(100, (primary.theory / maxUnit) * 100)}%`, background: '#0ea5e9' }} /></div><b>{money(primary.theory, 0)}</b></div>
+                      <div className="exec-mini-bar"><span>Kho tổng ({primary.unit})</span><div><i style={{ width: `${Math.min(100, (primary.issued / maxUnit) * 100)}%`, background: '#f59e0b' }} /></div><b>{money(primary.issued, 0)}</b></div>
+                      <div className="exec-mini-bar"><span>Thực đếm ({primary.unit})</span><div><i style={{ width: `${Math.min(100, (primary.actual / maxUnit) * 100)}%`, background: '#10b981' }} /></div><b>{money(primary.actual, 0)}</b></div>
+                    </div>
+                  ) : null}
+                  <div className="exec-bar-foot">
+                    <span>Độ phủ: <strong>{wh.coveragePct}%</strong> ({money(wh.counted)}/{money(wh.merged.length)} nhóm)</span>
+                    <span className={wh.snap.unmapped.length ? 'text-warning' : ''}>{money(wh.snap.unmapped.length)} chưa ghép</span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </section>
       </div>
