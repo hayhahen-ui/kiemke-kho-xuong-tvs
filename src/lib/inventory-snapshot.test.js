@@ -234,6 +234,11 @@ test('TongHop issued column counts only WIP POs; ThucLanh_SoVoi_LyThuyet splits 
  assert.equal(r.getCell('H2').value,3);
  assert.equal(r.getCell('I2').value,100);
  assert.equal(r.getCell('J2').value,-40);
+ assert.equal(r.getCell('L1').value,'Chi tiết PO');
+ const poDetail=String(r.getCell('L2').value);
+ assert.ok(poDetail.includes('Dở dang (1): PO-WIP (60)'));
+ assert.ok(poDetail.includes('Hoàn tất (1): PO-DONE (500)'));
+ assert.ok(poDetail.includes('Ngoài tiến độ (1): PO-X (7)'));
 });
 test('calculateInventorySnapshot uses per-order chemicalNorms for LAF and LVF (both mode)',()=>{
  const customData={

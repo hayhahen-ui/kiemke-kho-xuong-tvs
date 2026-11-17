@@ -213,14 +213,14 @@ export async function createSnapshotWorkbook(result, metadata) {
   explainRows.forEach(r=>explain.addRow([r.orderNo,r.purchaseOrder,r.model,r.color,r.plannedQty,r.rawChat,r.rawMay,r.rawGo,r.packed,r.received,r.issueLines,r.explanation]));
 
   const recon=wb.addWorksheet('ThucLanh_SoVoi_LyThuyet');
-  recon.addRow(['Mã vật tư','Tên vật tư','Đơn vị','Tổng thực lãnh kho tổng','Lãnh cho chỉ lệnh dở dang (= cột F TongHop)','Lãnh cho đơn đã hoàn tất / đã nhập kho','Lãnh cho PO không có trong tiến độ','Xuất không gắn PO','Nhu cầu lý thuyết dở dang','Chênh lệch (Lãnh dở dang − Lý thuyết)','Ghi chú']);
+  recon.addRow(['Mã vật tư','Tên vật tư','Đơn vị','Tổng thực lãnh kho tổng','Lãnh cho chỉ lệnh dở dang (= cột F TongHop)','Lãnh cho đơn đã hoàn tất / đã nhập kho','Lãnh cho PO không có trong tiến độ','Xuất không gắn PO','Nhu cầu lý thuyết dở dang','Chênh lệch (Lãnh dở dang − Lý thuyết)','Ghi chú','Chi tiết PO']);
   const reconRows = (metadata.materialIssues || []).length
     ? buildIssuedVsTheoryRows(metadata.materialIssues, result, metadata.warehouseId, { lvfStage: metadata.lvfStage, productionOrders: metadata.productionOrders, groupByName: metadata.groupByName })
     : [];
-  reconRows.forEach(r=>recon.addRow([r.materialCode,r.materialName,r.unit,r.total,r.wip,r.done,r.notInProgress,r.noPo,r.theory,r.variance,r.note]));
+  reconRows.forEach(r=>recon.addRow([r.materialCode,r.materialName,r.unit,r.total,r.wip,r.done,r.notInProgress,r.noPo,r.theory,r.variance,r.note,r.poDetail]));
   if (reconRows.length) {
     const t = reconRows.reduce((a,r)=>({total:a.total+r.total,wip:a.wip+r.wip,done:a.done+r.done,nip:a.nip+r.notInProgress,nopo:a.nopo+r.noPo}),{total:0,wip:0,done:0,nip:0,nopo:0});
-    const totalRow = recon.addRow(['TỔNG CỘNG','','',t.total,t.wip,t.done,t.nip,t.nopo,'','','Tổng các đơn vị khác nhau chỉ mang tính tham khảo']);
+    const totalRow = recon.addRow(['TỔNG CỘNG','','',t.total,t.wip,t.done,t.nip,t.nopo,'','','Tổng các đơn vị khác nhau chỉ mang tính tham khảo','']);
     totalRow.font = { bold: true };
   }
 
@@ -240,7 +240,8 @@ export async function createSnapshotWorkbook(result, metadata) {
     const yellow={ type:'pattern', pattern:'solid', fgColor:{ argb:'FFFFF2CC' } };
     sum.eachRow((row)=>{ row.getCell(6).fill=yellow; });
   }
-  recon.getColumn(1).width=24; recon.getColumn(2).width=52; recon.getColumn(3).width=8; recon.getColumn(11).width=60;
+  recon.getColumn(1).width=24; recon.getColumn(2).width=52; recon.getColumn(3).width=8; recon.getColumn(11).width=60; recon.getColumn(12).width=75;
+  recon.getColumn(12).alignment = { wrapText: true, vertical: 'top' };
   for (const c of [4,5,6,7,8,9,10]) recon.getColumn(c).numFmt='#,##0.00';
   const reconFill={ type:'pattern', pattern:'solid', fgColor:{ argb:'FFFFF2CC' } };
   recon.eachRow((row)=>{ row.getCell(5).fill=reconFill; });
@@ -314,7 +315,7 @@ export function buildIssuedVsTheoryRows(materialIssues, result, warehouseId, { l
   const map = new Map();
   const get = (code, name, unit) => {
     const k = keyOf(code, name, unit);
-    if (!map.has(k)) map.set(k, { codes: new Set(), names: [], unit, theory: 0, hasTheory: false, WIP: 0, DONE: 0, NOT_IN_PROGRESS: 0, NO_PO: 0, donePOs: new Set(), otherPOs: new Set() });
+    if (!map.has(k)) map.set(k, { codes: new Set(), names: [], unit, theory: 0, hasTheory: false, WIP: 0, DONE: 0, NOT_IN_PROGRESS: 0, NO_PO: 0, wipPOs: new Map(), donePOs: new Map(), otherPOs: new Map() });
     const x = map.get(k);
     if (code) x.codes.add(String(code).trim());
     if (name) x.names.push(name);
@@ -325,12 +326,22 @@ export function buildIssuedVsTheoryRows(materialIssues, result, warehouseId, { l
     x.theory += Number(s.quantity) || 0;
     x.hasTheory = true;
   }
+  const addPoQty = (poMap, po, qty) => {
+    const p = String(po || '').trim();
+    if (!p) return;
+    poMap.set(p, (poMap.get(p) || 0) + qty);
+  };
   for (const l of lines) {
     const x = get(l.materialCode, l.materialName, l.unit);
     x[l.category] += l.issuedQty;
-    if (l.category === 'DONE') x.donePOs.add(l.po);
-    if (l.category === 'NOT_IN_PROGRESS') x.otherPOs.add(l.po);
+    if (l.category === 'WIP') addPoQty(x.wipPOs, l.po, l.issuedQty);
+    if (l.category === 'DONE') addPoQty(x.donePOs, l.po, l.issuedQty);
+    if (l.category === 'NOT_IN_PROGRESS') addPoQty(x.otherPOs, l.po, l.issuedQty);
   }
+  const formatPoMap = (poMap) => [...poMap.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'vi'))
+    .map(([po, qty]) => `${po} (${Number(qty.toFixed(2))})`)
+    .join(', ');
   const rows = [];
   for (const x of map.values()) {
     const total = x.WIP + x.DONE + x.NOT_IN_PROGRESS + x.NO_PO;
@@ -342,6 +353,10 @@ export function buildIssuedVsTheoryRows(materialIssues, result, warehouseId, { l
     if (x.NOT_IN_PROGRESS > 0) notes.push(`${x.otherPOs.size} PO không có trong tiến độ`);
     if (x.NO_PO > 0) notes.push('Có xuất không gắn PO');
     if (!x.hasTheory && total > 0) notes.push('Không có nhu cầu lý thuyết dở dang');
+    const poParts = [];
+    if (x.wipPOs.size) poParts.push(`Dở dang (${x.wipPOs.size}): ${formatPoMap(x.wipPOs)}`);
+    if (x.donePOs.size) poParts.push(`Hoàn tất (${x.donePOs.size}): ${formatPoMap(x.donePOs)}`);
+    if (x.otherPOs.size) poParts.push(`Ngoài tiến độ (${x.otherPOs.size}): ${formatPoMap(x.otherPOs)}`);
     rows.push({
       materialCode: [...x.codes].join(' / '),
       materialName: name,
@@ -354,6 +369,7 @@ export function buildIssuedVsTheoryRows(materialIssues, result, warehouseId, { l
       theory: x.hasTheory ? x.theory : 0,
       variance,
       note: notes.join('; '),
+      poDetail: poParts.join(' | ').slice(0, 32000),
     });
   }
   return rows.sort((a, b) => String(a.materialCode).localeCompare(String(b.materialCode), 'vi', { numeric: true }));
