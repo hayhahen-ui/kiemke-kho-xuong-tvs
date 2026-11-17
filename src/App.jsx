@@ -94,18 +94,19 @@ function App() {
         if (!alive) return;
         const hasAnyData = (saved.productionOrders?.length || 0) > 0 || (saved.materials?.length || 0) > 0;
         if (hasAnyData) {
-          if (!(saved.materialIssues?.length) || !saved.importMeta?.['chemical-norms:LVF']) {
+          const needsMaterialColorUpgrade = saved.materialIssues?.some((m) => m.materialColor === undefined);
+          if (!(saved.materialIssues?.length) || !saved.importMeta?.['chemical-norms:LVF'] || needsMaterialColorUpgrade) {
             try {
               const bundled = await fetchRealDataBundle();
               if (alive && (bundled.materialIssues?.length || bundled.chemicalNorms?.length)) {
                 const updated = {
                   ...saved,
-                  materialIssues: saved.materialIssues?.length ? saved.materialIssues : (bundled.materialIssues || []),
-                  chemicalNorms: (!saved.importMeta?.['chemical-norms:LVF'] && bundled.chemicalNorms?.length) ? bundled.chemicalNorms : (saved.chemicalNorms || []),
+                  materialIssues: (saved.materialIssues?.length && !needsMaterialColorUpgrade) ? saved.materialIssues : (bundled.materialIssues || []),
+                  chemicalNorms: ((needsMaterialColorUpgrade || !saved.importMeta?.['chemical-norms:LVF']) && bundled.chemicalNorms?.length) ? bundled.chemicalNorms : (saved.chemicalNorms || []),
                   importMeta: {
                     ...(bundled.importMeta || {}),
                     ...(saved.importMeta || {}),
-                    ...((!saved.importMeta?.['chemical-norms:LVF'] && bundled.importMeta) ? {
+                    ...(((needsMaterialColorUpgrade || !saved.importMeta?.['chemical-norms:LVF']) && bundled.importMeta) ? {
                       'chemical-norms:HOA_MAU_LVF': bundled.importMeta['chemical-norms:HOA_MAU_LVF'],
                       'chemical-norms:LAF': bundled.importMeta['chemical-norms:LAF'],
                       'chemical-norms:LVF': bundled.importMeta['chemical-norms:LVF'],
@@ -1164,7 +1165,7 @@ function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts, onS
     return groupByName ? mergeRowsByMaterialName(base) : base;
   }, [comparison, calc.summary, groupByName]);
   const rows = displaySummary.filter(r => {
-    const matchText = `${r.materialCode} ${r.materialName}`.toLowerCase().includes(query.toLowerCase());
+    const matchText = `${r.materialCode} ${r.materialName} ${r.materialColor || ''}`.toLowerCase().includes(query.toLowerCase());
     if (!matchText) return false;
     if (countFilter === 'Đã kiểm đếm') return r.actual !== null && r.actual !== undefined;
     if (countFilter === 'Chưa đếm') return r.actual === null || r.actual === undefined;
@@ -1248,7 +1249,7 @@ function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts, onS
         </div>
       </div>
       {snapshotTab === 'summary' ? (
-        calc.ready && (mode !== 'issued' || issuedRows.length) && rows.length ? <div className="table-scroll"><table><thead><tr><th>MÃ VẬT TƯ / TÊN</th><th>ĐVT</th><th className="numeric">SỐ CHỈ LỆNH</th><th className="numeric">TỒN THEO ĐỊNH MỨC</th>{comparison && <><th className="numeric">ĐÃ LÃNH KHO TỔNG (CL DỞ DANG)</th><th className="numeric">THỰC ĐẾM HIỆN TRƯỜNG</th><th className="numeric">CHÊNH LỆCH</th><th>ĐỐI CHIẾU</th></>}<th>CHI TIẾT</th></tr></thead><tbody>{rows.map(r=><tr key={`${r.materialCode}|${r.unit}`}><td><strong>{r.materialCode}</strong>{r.materialCodes?.length > 1 && <span className="pill-badge" style={{marginLeft:6,fontSize:11,padding:'1px 6px',borderRadius:999,background:'var(--accent-soft, #e0f2fe)',color:'var(--accent, #0369a1)'}}>Gộp {r.materialCodes.length} mã</span>}<small>{r.materialName}</small></td><td>{r.unit}</td><td className="numeric">{money(r.orderCount)}</td><td className="numeric strong-cell">{r.quantity == null ? '—' : money(r.quantity,3)}</td>{comparison && <><td className="numeric">{r.issuedFromMain == null ? '—' : money(r.issuedFromMain,3)}</td><td className="numeric"><NumberInput className="cell-input numeric-input count-input" placeholder="Nhập tay" value={r.actual ?? ''} onSave={(val)=>updateManualCount(r,val)} /></td><td className={`numeric ${(r.variance || 0) < 0 ? 'text-danger' : (r.variance || 0) > 0 ? 'text-warning' : ''}`}>{r.variance == null ? '—' : money(r.variance,3)}</td><td>{r.comparison}</td></>}<td>{r.details.length ? <button className="text-button" onClick={()=>setSelected(r)}>Theo đơn →</button> : '—'}</td></tr>)}</tbody></table></div> : <EmptyInline text={calc.hasSource ? 'Chưa có dòng kết quả phù hợp. Kiểm tra cơ sở, tiến độ, định mức và dòng cần rà soát.' : 'Chưa có nguồn định mức cho kho này. Kiểm tra tab ChuaGhep hoặc nạp định mức trong Tác vụ nhập liệu.'}/>
+        calc.ready && (mode !== 'issued' || issuedRows.length) && rows.length ? <div className="table-scroll"><table><thead><tr><th>MÃ VẬT TƯ / TÊN</th><th>CODE MÀU</th><th>ĐVT</th><th className="numeric">SỐ CHỈ LỆNH</th><th className="numeric">TỒN THEO ĐỊNH MỨC</th>{comparison && <><th className="numeric">ĐÃ LÃNH KHO TỔNG (CL DỞ DANG)</th><th className="numeric">THỰC ĐẾM HIỆN TRƯỜNG</th><th className="numeric">CHÊNH LỆCH</th><th>ĐỐI CHIẾU</th></>}<th>CHI TIẾT</th></tr></thead><tbody>{rows.map(r=><tr key={`${r.materialCode}|${r.materialColor || ''}|${r.unit}`}><td><strong>{r.materialCode}</strong>{r.materialCodes?.length > 1 && <span className="pill-badge" style={{marginLeft:6,fontSize:11,padding:'1px 6px',borderRadius:999,background:'var(--accent-soft, #e0f2fe)',color:'var(--accent, #0369a1)'}}>Gộp {r.materialCodes.length} mã</span>}<small>{r.materialName}</small></td><td>{r.materialColor || '—'}</td><td>{r.unit}</td><td className="numeric">{money(r.orderCount)}</td><td className="numeric strong-cell">{r.quantity == null ? '—' : money(r.quantity,3)}</td>{comparison && <><td className="numeric">{r.issuedFromMain == null ? '—' : money(r.issuedFromMain,3)}</td><td className="numeric"><NumberInput className="cell-input numeric-input count-input" placeholder="Nhập tay" value={r.actual ?? ''} onSave={(val)=>updateManualCount(r,val)} /></td><td className={`numeric ${(r.variance || 0) < 0 ? 'text-danger' : (r.variance || 0) > 0 ? 'text-warning' : ''}`}>{r.variance == null ? '—' : money(r.variance,3)}</td><td>{r.comparison}</td></>}<td>{r.details.length ? <button className="text-button" onClick={()=>setSelected(r)}>Theo đơn →</button> : '—'}</td></tr>)}</tbody></table></div> : <EmptyInline text={calc.hasSource ? 'Chưa có dòng kết quả phù hợp. Kiểm tra cơ sở, tiến độ, định mức và dòng cần rà soát.' : 'Chưa có nguồn định mức cho kho này. Kiểm tra tab ChuaGhep hoặc nạp định mức trong Tác vụ nhập liệu.'}/>
       ) : (
         unmappedRows.length ? <div className="table-scroll"><table><thead><tr><th>CHỈ LỆNH</th><th>MÃ HÀNG</th><th>MÀU</th><th>MÃ VẬT TƯ</th><th>LÝ DO CẦN RÀ SOÁT</th></tr></thead><tbody>{unmappedRows.slice(0, 500).map((r, i) => <tr key={i}><td><strong>{r.productionOrder || r.orderNo || '—'}</strong></td><td>{r.model || '—'}</td><td>{r.color || '—'}</td><td>{r.materialCode || '—'}</td><td>{r.reason || '—'}</td></tr>)}</tbody></table>{unmappedRows.length > 500 && <div className="table-footnote"><span>Đang hiển thị 500 / {money(unmappedRows.length)} dòng. Xuất Excel để xem toàn bộ.</span></div>}</div> : <EmptyInline text="Không có dòng nào cần rà soát cho kho này." />
       )}

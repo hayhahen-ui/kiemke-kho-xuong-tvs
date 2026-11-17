@@ -117,8 +117,8 @@ export function calculateInventorySnapshot(data, warehouseId, { mode, issuedRows
   const grouped = new Map();
   for (const row of rows) {
     if (!row.unit || !row.materialCode) { issues.push({...row, reason:'Thiếu mã vật tư hoặc đơn vị; chưa cộng vào tổng.'}); continue; }
-    const k=[row.materialCode,row.unit].map(norm).join('|');
-    if (!grouped.has(k)) grouped.set(k,{materialCode:row.materialCode,materialName:row.materialName,unit:row.unit,quantity:0,details:[],orderKeys:new Set()});
+    const k=[row.materialCode, row.materialColor || '', row.unit].map(norm).join('|');
+    if (!grouped.has(k)) grouped.set(k,{materialCode:row.materialCode,materialName:row.materialName,materialColor:row.materialColor || '',unit:row.unit,quantity:0,details:[],orderKeys:new Set()});
     const item=grouped.get(k); item.quantity+=row.quantity; item.details.push(row); item.orderKeys.add(key(row.orderNo,row.model,row.color));
   }
   const summary=[...grouped.values()].map(({orderKeys,...x})=>({...x,orderCount:orderKeys.size})).sort((a,b)=>String(a.materialCode).localeCompare(String(b.materialCode),'vi'));
@@ -201,11 +201,11 @@ export async function createSnapshotWorkbook(result, metadata) {
   const { default: ExcelJS }=await import('exceljs'); const wb=new ExcelJS.Workbook();
   const info=wb.addWorksheet('ThongTin');
   for (const row of [['Mốc kiểm kê',metadata.asOf],['Kho',metadata.warehouse],['Công đoạn',result.stage],['Cơ sở',metadata.modeLabel],['Cách gộp',metadata.groupByName ? 'Gộp theo tên vật tư (ghép chung mã)' : 'Tách theo mã vật tư'],['Múi giờ thiết bị',metadata.timeZone || ''],['File tiến độ',metadata.progressSource || ''],['File định mức',metadata.normSource || ''],['File số đôi đã lĩnh',metadata.issuedSource || ''],['File kiểm đếm',metadata.countSource || ''],['Ghi chú','Tính theo dữ liệu đã nạp hiện tại, không tự dựng lại dữ liệu quá khứ. Số dở dang theo định mức; không phải tồn sổ.'],['Cảnh báo','Kiểm tra ChuaGhep và GiaiThich; kết quả có thể chưa đầy đủ.']]) info.addRow(row); info.columns=[{width:25},{width:85}];
-  const sum=wb.addWorksheet('TongHop'); sum.addRow(['Mã vật tư','Tên vật tư','Đơn vị','Số chỉ lệnh','Tồn lý thuyết theo dở dang']);
-  if (metadata.comparison) { sum.getRow(1).getCell(6).value='Đã lãnh kho tổng (chỉ lệnh dở dang)'; sum.getRow(1).getCell(7).value='Kiểm đếm thực tế'; sum.getRow(1).getCell(8).value='Chênh lệch tạm tính'; sum.getRow(1).getCell(9).value='Ghi chú'; }
-  (metadata.comparison || metadata.summaryRows || result.summary).forEach(r=>sum.addRow([r.materialCode,r.materialName,r.unit,r.orderCount,r.quantity, ...(metadata.comparison ? [r.issuedFromMain,r.actual,r.variance,r.comparison] : [])]));
-  const detail=wb.addWorksheet('TheoDon'); detail.addRow(['Chỉ lệnh','PO','Mã hàng','Màu','Công đoạn','Số đôi cơ sở','Đã qua công đoạn','Còn lại','Mã vật tư','Tên vật tư','ĐVT','Định mức/đôi','Tồn lý thuyết','Nguồn','Dòng nguồn']);
-  result.rows.forEach(r=>detail.addRow([r.orderNo,r.purchaseOrder,r.model,r.color,r.stage,r.qty,r.done,r.basisQty,r.materialCode,r.materialName,r.unit,r.rate,r.quantity,r.source,r.sourceRow]));
+  const sum=wb.addWorksheet('TongHop'); sum.addRow(['Mã vật tư','Tên vật tư','Code màu','Đơn vị','Số chỉ lệnh','Tồn lý thuyết theo dở dang']);
+  if (metadata.comparison) { sum.getRow(1).getCell(7).value='Đã lãnh kho tổng (chỉ lệnh dở dang)'; sum.getRow(1).getCell(8).value='Kiểm đếm thực tế'; sum.getRow(1).getCell(9).value='Chênh lệch tạm tính'; sum.getRow(1).getCell(10).value='Ghi chú'; }
+  (metadata.comparison || metadata.summaryRows || result.summary).forEach(r=>sum.addRow([r.materialCode,r.materialName,r.materialColor || '',r.unit,r.orderCount,r.quantity, ...(metadata.comparison ? [r.issuedFromMain,r.actual,r.variance,r.comparison] : [])]));
+  const detail=wb.addWorksheet('TheoDon'); detail.addRow(['Chỉ lệnh','PO','Mã hàng','Màu','Công đoạn','Số đôi cơ sở','Đã qua công đoạn','Còn lại','Mã vật tư','Tên vật tư','Code màu','ĐVT','Định mức/đôi','Tồn lý thuyết','Nguồn','Dòng nguồn']);
+  result.rows.forEach(r=>detail.addRow([r.orderNo,r.purchaseOrder,r.model,r.color,r.stage,r.qty,r.done,r.basisQty,r.materialCode,r.materialName,r.materialColor || '',r.unit,r.rate,r.quantity,r.source,r.sourceRow]));
   const gaps=wb.addWorksheet('ChuaGhep'); gaps.addRow(['Chỉ lệnh','Mã hàng','Màu','Mã vật tư','Lý do']); result.unmapped.forEach(r=>gaps.addRow([r.productionOrder || r.orderNo || '',r.model || '',r.color || '',r.materialCode || '',r.reason || '']));
   const explain=wb.addWorksheet('GiaiThich');
   explain.addRow(['Chỉ lệnh','PO','Mã hàng','Màu','SL đơn hàng','Chặt (gốc)','May (gốc)','Gò (gốc)','Đóng thùng','Nhập kho','Xuất NVL theo PO (dòng)','Giải thích & Xử lý hệ thống']);
@@ -213,14 +213,14 @@ export async function createSnapshotWorkbook(result, metadata) {
   explainRows.forEach(r=>explain.addRow([r.orderNo,r.purchaseOrder,r.model,r.color,r.plannedQty,r.rawChat,r.rawMay,r.rawGo,r.packed,r.received,r.issueLines,r.explanation]));
 
   const recon=wb.addWorksheet('ThucLanh_SoVoi_LyThuyet');
-  recon.addRow(['Mã vật tư','Tên vật tư','Đơn vị','Tổng thực lãnh kho tổng','Lãnh cho chỉ lệnh dở dang (= cột F TongHop)','Lãnh cho đơn đã hoàn tất / đã nhập kho','Lãnh cho PO không có trong tiến độ','Xuất không gắn PO','Nhu cầu lý thuyết dở dang','Chênh lệch (Lãnh dở dang − Lý thuyết)','Ghi chú','Chi tiết PO']);
+  recon.addRow(['Mã vật tư','Tên vật tư','Code màu','Đơn vị','Tổng thực lãnh kho tổng','Lãnh cho chỉ lệnh dở dang (= cột G TongHop)','Lãnh cho đơn đã hoàn tất / đã nhập kho','Lãnh cho PO không có trong tiến độ','Xuất không gắn PO','Nhu cầu lý thuyết dở dang','Chênh lệch (Lãnh dở dang − Lý thuyết)','Ghi chú','Chi tiết PO']);
   const reconRows = (metadata.materialIssues || []).length
     ? buildIssuedVsTheoryRows(metadata.materialIssues, result, metadata.warehouseId, { lvfStage: metadata.lvfStage, productionOrders: metadata.productionOrders, groupByName: metadata.groupByName })
     : [];
-  reconRows.forEach(r=>recon.addRow([r.materialCode,r.materialName,r.unit,r.total,r.wip,r.done,r.notInProgress,r.noPo,r.theory,r.variance,r.note,r.poDetail]));
+  reconRows.forEach(r=>recon.addRow([r.materialCode,r.materialName,r.materialColor || '',r.unit,r.total,r.wip,r.done,r.notInProgress,r.noPo,r.theory,r.variance,r.note,r.poDetail]));
   if (reconRows.length) {
     const t = reconRows.reduce((a,r)=>({total:a.total+r.total,wip:a.wip+r.wip,done:a.done+r.done,nip:a.nip+r.notInProgress,nopo:a.nopo+r.noPo}),{total:0,wip:0,done:0,nip:0,nopo:0});
-    const totalRow = recon.addRow(['TỔNG CỘNG','','',t.total,t.wip,t.done,t.nip,t.nopo,'','','Tổng các đơn vị khác nhau chỉ mang tính tham khảo','']);
+    const totalRow = recon.addRow(['TỔNG CỘNG','','','',t.total,t.wip,t.done,t.nip,t.nopo,'','','Tổng các đơn vị khác nhau chỉ mang tính tham khảo','']);
     totalRow.font = { bold: true };
   }
 
@@ -234,17 +234,17 @@ export async function createSnapshotWorkbook(result, metadata) {
     const h=s.getRow(1); h.font={bold:true}; h.alignment={vertical:'middle',wrapText:true}; h.height=32;
     h.eachCell(c=>{c.fill=headerFill;});
   }
-  sum.getColumn(1).width=24; sum.getColumn(2).width=52; sum.getColumn(3).width=8; sum.getColumn(9).width=34;
-  for (const c of [5,6,7,8]) sum.getColumn(c).numFmt='#,##0.00';
+  sum.getColumn(1).width=24; sum.getColumn(2).width=52; sum.getColumn(3).width=24; sum.getColumn(4).width=8; sum.getColumn(10).width=34;
+  for (const c of [6,7,8,9]) sum.getColumn(c).numFmt='#,##0.00';
   if (metadata.comparison) {
     const yellow={ type:'pattern', pattern:'solid', fgColor:{ argb:'FFFFF2CC' } };
-    sum.eachRow((row)=>{ row.getCell(6).fill=yellow; });
+    sum.eachRow((row)=>{ row.getCell(7).fill=yellow; });
   }
-  recon.getColumn(1).width=24; recon.getColumn(2).width=52; recon.getColumn(3).width=8; recon.getColumn(11).width=60; recon.getColumn(12).width=75;
-  recon.getColumn(12).alignment = { wrapText: true, vertical: 'top' };
-  for (const c of [4,5,6,7,8,9,10]) recon.getColumn(c).numFmt='#,##0.00';
+  recon.getColumn(1).width=24; recon.getColumn(2).width=52; recon.getColumn(3).width=24; recon.getColumn(4).width=8; recon.getColumn(12).width=60; recon.getColumn(13).width=75;
+  recon.getColumn(13).alignment = { wrapText: true, vertical: 'top' };
+  for (const c of [5,6,7,8,9,10,11]) recon.getColumn(c).numFmt='#,##0.00';
   const reconFill={ type:'pattern', pattern:'solid', fgColor:{ argb:'FFFFF2CC' } };
-  recon.eachRow((row)=>{ row.getCell(5).fill=reconFill; });
+  recon.eachRow((row)=>{ row.getCell(6).fill=reconFill; });
   explain.getColumn(12).width = 65;
   return wb.xlsx.writeBuffer();
 }
@@ -293,11 +293,12 @@ export function summarizeWarehouseIssued(materialIssues, result, warehouseId, { 
   const byCanon = new Map();
   for (const row of classifyWarehouseIssues(materialIssues, result, warehouseId, { lvfStage, productionOrders })) {
     if (row.category !== 'WIP') continue;
-    const k = [row.materialCode, row.unit].map(norm).join('|');
-    const existing = byKey.get(k) || { materialCode: row.materialCode, materialName: row.materialName, unit: row.unit, issuedFromMain: 0 };
+    const colorKey = norm(row.materialColor || '');
+    const k = [row.materialCode, colorKey, row.unit].map(norm).join('|');
+    const existing = byKey.get(k) || { materialCode: row.materialCode, materialName: row.materialName, materialColor: row.materialColor || '', unit: row.unit, issuedFromMain: 0 };
     existing.issuedFromMain += row.issuedQty;
     byKey.set(k, existing);
-    const ck = `${canonicalCode(row.materialCode)}|${norm(row.unit)}`;
+    const ck = `${canonicalCode(row.materialCode)}|${colorKey}|${norm(row.unit)}`;
     if (!byCanon.has(ck)) byCanon.set(ck, k);
   }
   return { byKey, byCanon };
@@ -309,20 +310,21 @@ export function summarizeWarehouseIssued(materialIssues, result, warehouseId, { 
  */
 export function buildIssuedVsTheoryRows(materialIssues, result, warehouseId, { lvfStage = '', productionOrders = [], groupByName = false } = {}) {
   const lines = classifyWarehouseIssues(materialIssues, result, warehouseId, { lvfStage, productionOrders });
-  const keyOf = (code, name, unit) => (groupByName
-    ? `${normalizeMaterialNameKey(name) || norm(code)}|${norm(unit)}`
-    : `${canonicalCode(code)}|${norm(unit)}`);
+  const keyOf = (code, name, unit, materialColor = '') => (groupByName
+    ? `${normalizeMaterialNameKey(name) || norm(code)}|${norm(materialColor)}|${norm(unit)}`
+    : `${canonicalCode(code)}|${norm(materialColor)}|${norm(unit)}`);
   const map = new Map();
-  const get = (code, name, unit) => {
-    const k = keyOf(code, name, unit);
-    if (!map.has(k)) map.set(k, { codes: new Set(), names: [], unit, theory: 0, hasTheory: false, WIP: 0, DONE: 0, NOT_IN_PROGRESS: 0, NO_PO: 0, wipPOs: new Map(), donePOs: new Map(), otherPOs: new Map() });
+  const get = (code, name, unit, materialColor = '') => {
+    const k = keyOf(code, name, unit, materialColor);
+    if (!map.has(k)) map.set(k, { codes: new Set(), names: [], materialColor: String(materialColor || '').trim(), unit, theory: 0, hasTheory: false, WIP: 0, DONE: 0, NOT_IN_PROGRESS: 0, NO_PO: 0, wipPOs: new Map(), donePOs: new Map(), otherPOs: new Map() });
     const x = map.get(k);
     if (code) x.codes.add(String(code).trim());
     if (name) x.names.push(name);
+    if (!x.materialColor && materialColor) x.materialColor = String(materialColor).trim();
     return x;
   };
   for (const s of result?.summary || []) {
-    const x = get(s.materialCode, s.materialName, s.unit);
+    const x = get(s.materialCode, s.materialName, s.unit, s.materialColor || '');
     x.theory += Number(s.quantity) || 0;
     x.hasTheory = true;
   }
@@ -332,7 +334,7 @@ export function buildIssuedVsTheoryRows(materialIssues, result, warehouseId, { l
     poMap.set(p, (poMap.get(p) || 0) + qty);
   };
   for (const l of lines) {
-    const x = get(l.materialCode, l.materialName, l.unit);
+    const x = get(l.materialCode, l.materialName, l.unit, l.materialColor || '');
     x[l.category] += l.issuedQty;
     if (l.category === 'WIP') addPoQty(x.wipPOs, l.po, l.issuedQty);
     if (l.category === 'DONE') addPoQty(x.donePOs, l.po, l.issuedQty);
@@ -360,6 +362,7 @@ export function buildIssuedVsTheoryRows(materialIssues, result, warehouseId, { l
     rows.push({
       materialCode: [...x.codes].join(' / '),
       materialName: name,
+      materialColor: x.materialColor,
       unit: x.unit,
       total,
       wip: x.WIP,
@@ -372,24 +375,25 @@ export function buildIssuedVsTheoryRows(materialIssues, result, warehouseId, { l
       poDetail: poParts.join(' | ').slice(0, 32000),
     });
   }
-  return rows.sort((a, b) => String(a.materialCode).localeCompare(String(b.materialCode), 'vi', { numeric: true }));
+  return rows.sort((a, b) => String(a.materialCode).localeCompare(String(b.materialCode), 'vi', { numeric: true }) || String(a.materialColor).localeCompare(String(b.materialColor), 'vi'));
 }
 
 // Counts are optional; keep null distinct from a real zero. Extra materials are
 // not claimed as surplus when the theoretical side has gaps or no source.
 export function compareSnapshotCounts(result, countRows, warehouseId, { materialIssues = [], lvfStage = '', productionOrders = [] } = {}) {
   const byKey = new Map();
-  for (const c of countRows.filter(x=>x.warehouseId===warehouseId)) byKey.set([c.materialCode,c.unit].map(norm).join('|'),c);
+  for (const c of countRows.filter(x=>x.warehouseId===warehouseId)) byKey.set([c.materialCode, c.materialColor || '', c.unit].map(norm).join('|'), c);
   const hasIssueData = Array.isArray(materialIssues) && materialIssues.length > 0;
   const { byKey: issuedMap, byCanon: issuedCanon } = hasIssueData
     ? summarizeWarehouseIssued(materialIssues, result, warehouseId, { lvfStage, productionOrders })
     : { byKey: new Map(), byCanon: new Map() };
-  const takeIssued = (materialCode, unit) => {
+  const takeIssued = (materialCode, materialColor, unit) => {
     if (!hasIssueData) return null;
-    const k = [materialCode, unit].map(norm).join('|');
+    const colorKey = norm(materialColor || '');
+    const k = [materialCode, colorKey, unit].map(norm).join('|');
     let hit = issuedMap.get(k);
     if (!hit) {
-      const ck = `${canonicalCode(materialCode)}|${norm(unit)}`;
+      const ck = `${canonicalCode(materialCode)}|${colorKey}|${norm(unit)}`;
       const mappedKey = issuedCanon.get(ck);
       if (mappedKey) { hit = issuedMap.get(mappedKey); issuedMap.delete(mappedKey); }
     } else {
@@ -397,22 +401,32 @@ export function compareSnapshotCounts(result, countRows, warehouseId, { material
     }
     return hit ? hit.issuedFromMain : 0;
   };
+  const summaryCodeUnitCount = new Map();
+  for (const r of result.summary || []) {
+    const cu = `${canonicalCode(r.materialCode)}|${norm(r.unit)}`;
+    summaryCodeUnitCount.set(cu, (summaryCodeUnitCount.get(cu) || 0) + 1);
+  }
   const rows=result.summary.map(r=>{
-    const k=[r.materialCode,r.unit].map(norm).join('|'); let c=byKey.get(k), matchedKey=k;
-    if (!c) { const candidates=[...byKey].filter(([,x])=>canonicalCode(x.materialCode)===canonicalCode(r.materialCode) && norm(x.unit)===norm(r.unit)); const theoretical=result.summary.filter(x=>canonicalCode(x.materialCode)===canonicalCode(r.materialCode) && norm(x.unit)===norm(r.unit)); if(candidates.length===1 && theoretical.length===1) [matchedKey,c]=candidates[0]; }
+    const colorKey = norm(r.materialColor || '');
+    const k=[r.materialCode, colorKey, r.unit].map(norm).join('|'); let c=byKey.get(k), matchedKey=k;
+    if (!c && colorKey && summaryCodeUnitCount.get(`${canonicalCode(r.materialCode)}|${norm(r.unit)}`) === 1) {
+      const noColorKey = [r.materialCode, '', r.unit].map(norm).join('|');
+      if (byKey.has(noColorKey)) { c = byKey.get(noColorKey); matchedKey = noColorKey; }
+    }
+    if (!c) { const candidates=[...byKey].filter(([,x])=>canonicalCode(x.materialCode)===canonicalCode(r.materialCode) && norm(x.unit)===norm(r.unit) && (!colorKey || norm(x.materialColor || '') === colorKey || summaryCodeUnitCount.get(`${canonicalCode(r.materialCode)}|${norm(r.unit)}`) === 1)); const theoretical=result.summary.filter(x=>canonicalCode(x.materialCode)===canonicalCode(r.materialCode) && norm(x.unit)===norm(r.unit)); if(candidates.length===1 && theoretical.length===1) [matchedKey,c]=candidates[0]; }
     if (c) byKey.delete(matchedKey);
     const actual=c ? c.quantity : null;
-    const issuedFromMain = takeIssued(r.materialCode, r.unit);
+    const issuedFromMain = takeIssued(r.materialCode, r.materialColor || '', r.unit);
     return {...r,issuedFromMain,actual,variance:actual===null ? null : actual-r.quantity, comparison:actual===null ? 'Chưa đếm' : result.unmapped.length ? 'Tạm tính — còn dòng chưa ghép' : 'Đã đối chiếu'};
   });
   for (const c of byKey.values()) {
     const complete=result.hasSource && result.orderCount > 0 && !result.unmapped.length;
-    const issuedFromMain = takeIssued(c.materialCode, c.unit);
-    rows.push({materialCode:c.materialCode,materialName:c.materialName,unit:c.unit,quantity:complete ? 0 : null,issuedFromMain,actual:c.quantity,variance:complete ? c.quantity : null,orderCount:0,details:[],comparison:complete ? 'Ngoài BOM đơn dở dang' : 'Ngoài kết quả đã ghép — cần rà soát'});
+    const issuedFromMain = takeIssued(c.materialCode, c.materialColor || '', c.unit);
+    rows.push({materialCode:c.materialCode,materialName:c.materialName,materialColor:c.materialColor || '',unit:c.unit,quantity:complete ? 0 : null,issuedFromMain,actual:c.quantity,variance:complete ? c.quantity : null,orderCount:0,details:[],comparison:complete ? 'Ngoài BOM đơn dở dang' : 'Ngoài kết quả đã ghép — cần rà soát'});
   }
   for (const iss of issuedMap.values()) {
     const complete=result.hasSource && result.orderCount > 0 && !result.unmapped.length;
-    rows.push({materialCode:iss.materialCode,materialName:iss.materialName,unit:iss.unit,quantity:complete ? 0 : null,issuedFromMain:iss.issuedFromMain,actual:null,variance:null,orderCount:0,details:[],comparison:'Đã lãnh kho tổng — chưa đếm'});
+    rows.push({materialCode:iss.materialCode,materialName:iss.materialName,materialColor:iss.materialColor || '',unit:iss.unit,quantity:complete ? 0 : null,issuedFromMain:iss.issuedFromMain,actual:null,variance:null,orderCount:0,details:[],comparison:'Đã lãnh kho tổng — chưa đếm'});
   }
   return rows;
 }
@@ -463,7 +477,7 @@ export function mergeRowsByMaterialName(rows) {
   const groups = new Map();
   for (const row of rows || []) {
     const nameKey = normalizeMaterialNameKey(row.materialName) || norm(row.materialCode);
-    const groupKey = `${nameKey}|${norm(row.unit)}`;
+    const groupKey = `${nameKey}|${norm(row.materialColor || '')}|${norm(row.unit)}`;
     if (!groups.has(groupKey)) groups.set(groupKey, []);
     groups.get(groupKey).push(row);
   }
@@ -674,6 +688,8 @@ export async function readMaterialIssueWorkbook(source) {
       const map = {};
       for (const [c, v] of Object.entries(cells)) map[compact(v)] = Number(c);
       if (map.MAVATTU && (map.SOLUONGXUATKHO || map.THUCLANH || map.DALANH)) {
+        const unitCol = map.DONVI || 30;
+        const matColorCol = (cells[unitCol - 1] && compact(cells[unitCol - 1]) === 'MAU') ? (unitCol - 1) : (map.MAU > map.MAVATTU ? map.MAU : 29);
         headerCols = {
           dept: map.DONVIYEUCAU || 10,
           stage: map.CONGDOANSANXUAT || 11,
@@ -682,7 +698,8 @@ export async function readMaterialIssueWorkbook(source) {
           group: map.NHOMLON || 21,
           code: map.MAVATTU,
           name: map.TENVATTU || 25,
-          unit: map.DONVI || 30,
+          materialColor: matColorCol,
+          unit: unitCol,
           issuedQty: map.SOLUONGXUATKHO || map.THUCLANH || map.DALANH,
         };
       } else if (rowIndex > 10) {
@@ -704,12 +721,13 @@ export async function readMaterialIssueWorkbook(source) {
     const po = cells[headerCols.po] || '';
     const stage = cells[headerCols.stage] || '';
     const materialName = cells[headerCols.name] || '';
+    const materialColor = cells[headerCols.materialColor] || '';
     const unit = cells[headerCols.unit] || '';
     totalRows += 1;
 
-    const k = [warehouseId, po, stage, materialCode, unit].map(norm).join('|');
+    const k = [warehouseId, po, stage, materialCode, materialColor, unit].map(norm).join('|');
     if (!grouped.has(k)) {
-      grouped.set(k, { warehouseId, po, stage, materialCode, materialName, unit, issuedQty: 0 });
+      grouped.set(k, { warehouseId, po, stage, materialCode, materialName, materialColor, unit, issuedQty: 0 });
     }
     grouped.get(k).issuedQty += issuedQty;
     return true;
@@ -763,6 +781,8 @@ export async function readBomDemandWorkbook(source, { workshopCounts = [], mater
       const map = {};
       for (const [c, v] of Object.entries(cells)) map[compact(v)] = Number(c);
       if (map.MAVATTU && (map.CHILENHDH || map.CHILENH) && (map.SOLUONGTHEODONHANG || map.SOLUONGTUNGSIZE)) {
+        const unitCol = map.DONVI || 30;
+        const matColorCol = (cells[unitCol - 1] && compact(cells[unitCol - 1]) === 'MAU') ? (unitCol - 1) : (map.MAU > map.MAVATTU ? map.MAU : 29);
         headerCols = {
           orderNo: map.CHILENHDH || map.CHILENH || 11,
           po: map.SOPO || 12,
@@ -775,7 +795,8 @@ export async function readBomDemandWorkbook(source, { workshopCounts = [], mater
           code: map.MAVATTU || 23,
           name: map.TENVATTU || 24,
           size: map.SIZE || 27,
-          unit: map.DONVI || 30,
+          materialColor: matColorCol,
+          unit: unitCol,
           orderBomQty: map.SOLUONGTHEODONHANG || 31,
           sizeBomQty: map.SOLUONGTUNGSIZE || 32,
         };
@@ -826,9 +847,10 @@ export async function readBomDemandWorkbook(source, { workshopCounts = [], mater
     const color = cells[headerCols.colorName] || cells[headerCols.colorCode] || '';
     const unit = cells[headerCols.unit] || '';
     const materialName = cells[headerCols.name] || '';
+    const materialColor = cells[headerCols.materialColor] || '';
     totalRows += 1;
 
-    const k = [warehouseId, orderNo, model, color, materialCode, unit, operation].map(norm).join('|');
+    const k = [warehouseId, orderNo, model, color, materialCode, materialColor, unit, operation].map(norm).join('|');
     if (!grouped.has(k)) {
       grouped.set(k, {
         warehouseId,
@@ -842,6 +864,7 @@ export async function readBomDemandWorkbook(source, { workshopCounts = [], mater
         operation,
         materialCode,
         materialName,
+        materialColor,
         unit,
         sourceOrderQty,
         sourceQuantity: 0,

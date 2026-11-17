@@ -61,7 +61,7 @@ async function main() {
   const chemColumns = [
     'warehouseId', 'purchaseOrder', 'model', 'colorCode', 'color',
     'productionOrder', 'component', 'formulaName', 'materialGroup',
-    'materialCode', 'materialName', 'unit', 'specification', 'operation', 'sourceFile',
+    'materialCode', 'materialName', 'materialColor', 'unit', 'specification', 'operation', 'sourceFile',
   ];
   const chemNumeric = [
     'sourceOrderQty', 'batchWeight', 'materialWeight', 'ratio', 'sourceQuantity', 'sourceRow',

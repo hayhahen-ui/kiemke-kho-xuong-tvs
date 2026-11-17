@@ -56,7 +56,7 @@ test('export contains metadata, per-material and per-order results and gaps',asy
  const buf=await createSnapshotWorkbook(result,{asOf:'2026-11-14T10:00',warehouse:'Kho xưởng LAF',modeLabel:'Số đôi đã lĩnh'});
  const wb=new ExcelJS.Workbook(); await wb.xlsx.load(buf);
  assert.deepEqual(wb.worksheets.map(s=>s.name),['ThongTin','TongHop','TheoDon','ChuaGhep','GiaiThich','ThucLanh_SoVoi_LyThuyet']);
- assert.equal(wb.getWorksheet('TongHop').getCell('E2').value,110);
+ assert.equal(wb.getWorksheet('TongHop').getCell('F2').value,110);
  assert.equal(wb.getWorksheet('TheoDon').getCell('H2').value,300);
 });
 
@@ -225,20 +225,48 @@ test('TongHop issued column counts only WIP POs; ThucLanh_SoVoi_LyThuyet splits 
  assert.equal(cmp[0].issuedFromMain,60);
  const bytes=await createSnapshotWorkbook(res,{asOf:'x',warehouse:'Kho Hóa mẫu LAF',warehouseId:'HOA_MAU_LAF',comparison:cmp,productionOrders:prod,materialIssues:issues});
  const wb=new ExcelJS.Workbook(); await wb.xlsx.load(bytes);
- assert.equal(wb.getWorksheet('TongHop').getCell('F2').value,60);
+ assert.equal(wb.getWorksheet('TongHop').getCell('G2').value,60);
  const r=wb.getWorksheet('ThucLanh_SoVoi_LyThuyet');
- assert.equal(r.getCell('D2').value,570);
- assert.equal(r.getCell('E2').value,60);
- assert.equal(r.getCell('F2').value,500);
- assert.equal(r.getCell('G2').value,7);
- assert.equal(r.getCell('H2').value,3);
- assert.equal(r.getCell('I2').value,100);
- assert.equal(r.getCell('J2').value,-40);
- assert.equal(r.getCell('L1').value,'Chi tiết PO');
- const poDetail=String(r.getCell('L2').value);
+ assert.equal(r.getCell('C1').value,'Code màu');
+ assert.equal(r.getCell('E2').value,570);
+ assert.equal(r.getCell('F2').value,60);
+ assert.equal(r.getCell('G2').value,500);
+ assert.equal(r.getCell('H2').value,7);
+ assert.equal(r.getCell('I2').value,3);
+ assert.equal(r.getCell('J2').value,100);
+ assert.equal(r.getCell('K2').value,-40);
+ assert.equal(r.getCell('M1').value,'Chi tiết PO');
+ const poDetail=String(r.getCell('M2').value);
  assert.ok(poDetail.includes('Dở dang (1): PO-WIP (60)'));
  assert.ok(poDetail.includes('Hoàn tất (1): PO-DONE (500)'));
  assert.ok(poDetail.includes('Ngoài tiến độ (1): PO-X (7)'));
+});
+test('same material code with different materialColor (e.g. AETF vs A0QM) stays split across summary and reconciliation',async()=>{
+ const colorData={
+  ...data,
+  productionOrders:[
+   {orderNo:'DH_C1',purchaseOrder:'PO_C1',model:'M1',color:'RED',plannedQty:100,productionQty:100,stageQuantities:{LAF_CUT:0,LVF_SEW:0,LVF_GO:0,PACKED:0,RECEIVED:0}},
+   {orderNo:'DH_C2',purchaseOrder:'PO_C2',model:'M1',color:'BLUE',plannedQty:100,productionQty:100,stageQuantities:{LAF_CUT:0,LVF_SEW:0,LVF_GO:0,PACKED:0,RECEIVED:0}},
+  ],
+  chemicalNorms:[
+   {warehouseId:'LAF',productionOrder:'DH_C1',purchaseOrder:'PO_C1',model:'M1',color:'RED',materialCode:'003420',materialName:'VẢI COTTON THT- CM2C250 K 1.82M',materialColor:'AETF',unit:'MÉT',operation:'Chặt',sourceOrderQty:100,sourceQuantity:50},
+   {warehouseId:'LAF',productionOrder:'DH_C2',purchaseOrder:'PO_C2',model:'M1',color:'BLUE',materialCode:'003420',materialName:'VẢI COTTON THT- CM2C250 K 1.82M',materialColor:'A0QM',unit:'MÉT',operation:'Chặt',sourceOrderQty:100,sourceQuantity:80},
+  ],
+ };
+ const issues=[
+  {warehouseId:'LAF',po:'PO_C1',stage:'CHẶT',materialCode:'003420',materialName:'VẢI COTTON THT- CM2C250 K 1.82M',materialColor:'AETF',unit:'MÉT',issuedQty:45},
+  {warehouseId:'LAF',po:'PO_C2',stage:'CHẶT',materialCode:'003420',materialName:'VẢI COTTON THT- CM2C250 K 1.82M',materialColor:'A0QM',unit:'MÉT',issuedQty:90},
+ ];
+ const calc=calculateInventorySnapshot(colorData,'LAF',{mode:'planned'});
+ assert.equal(calc.summary.length,2);
+ const cmp=compareSnapshotCounts(calc,[],'LAF',{materialIssues:issues,productionOrders:colorData.productionOrders});
+ const merged=mergeRowsByMaterialName(cmp);
+ assert.equal(merged.length,2);
+ const bytes=await createSnapshotWorkbook(calc,{asOf:'x',warehouse:'Kho xưởng LAF',warehouseId:'LAF',comparison:merged,summaryRows:merged,productionOrders:colorData.productionOrders,materialIssues:issues});
+ const wb=new ExcelJS.Workbook(); await wb.xlsx.load(bytes);
+ const recon=wb.getWorksheet('ThucLanh_SoVoi_LyThuyet');
+ const colors=[recon.getCell('C2').value,recon.getCell('C3').value].sort();
+ assert.deepEqual(colors,['A0QM','AETF']);
 });
 test('calculateInventorySnapshot uses per-order chemicalNorms for LAF and LVF (both mode)',()=>{
  const customData={
