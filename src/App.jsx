@@ -41,11 +41,14 @@ function currentImportedRows(rows, importMeta, taskId) {
   return batchId ? (rows || []).filter((row) => row.batchId === batchId) : (rows || []);
 }
 
+const isAccessoryOrder = (o) => /PHU\s*KIEN|PHỤ\s*KIỆN|ACCESSORY|PHU\s*LIEU|PHỤ\s*LIỆU/i.test(
+  `${o.productType || ''} ${o.sourceSheet || ''} ${o.model || ''} ${o.customer || ''}`
+);
+
 function currentOrderRows(data) {
   const productionOrders = currentImportedRows(data.productionOrders, data.importMeta, 'production-orders');
-  if (!productionOrders.length) return data.orders || [];
-  const keys = new Set(productionOrders.map(orderKey));
-  return [...productionOrders, ...(data.orders || []).filter((order) => !keys.has(orderKey(order)))];
+  const base = productionOrders.length ? productionOrders : (data.orders || []);
+  return base.filter((o) => !isAccessoryOrder(o));
 }
 
 function orderResolutionContext(data) {
@@ -95,12 +98,14 @@ function App() {
         const hasAnyData = (saved.productionOrders?.length || 0) > 0 || (saved.materials?.length || 0) > 0;
         if (hasAnyData) {
           const needsMaterialColorUpgrade = saved.materialIssues?.some((m) => m.materialColor === undefined);
-          if (!(saved.materialIssues?.length) || !saved.importMeta?.['chemical-norms:LVF'] || needsMaterialColorUpgrade) {
+          const hasLegacyDonHangOrders = (saved.orders?.length || 0) > 0 && (saved.productionOrders?.length || 0) > 0;
+          if (!(saved.materialIssues?.length) || !saved.importMeta?.['chemical-norms:LVF'] || needsMaterialColorUpgrade || hasLegacyDonHangOrders) {
             try {
               const bundled = await fetchRealDataBundle();
               if (alive && (bundled.materialIssues?.length || bundled.chemicalNorms?.length)) {
                 const updated = {
                   ...saved,
+                  orders: hasLegacyDonHangOrders ? [] : (saved.orders || []),
                   materialIssues: (saved.materialIssues?.length && !needsMaterialColorUpgrade) ? saved.materialIssues : (bundled.materialIssues || []),
                   chemicalNorms: ((needsMaterialColorUpgrade || !saved.importMeta?.['chemical-norms:LVF']) && bundled.chemicalNorms?.length) ? bundled.chemicalNorms : (saved.chemicalNorms || []),
                   importMeta: {
@@ -1079,7 +1084,7 @@ function OrdersPage({ data, onAdd, onProgress }) {
     <div className="page-heading"><div><div className="eyebrow">BẢNG A <span>•</span> TIẾN ĐỘ THEO MÃ HÀNG & MÀU SẮC</div><h1>Đơn hàng sản xuất</h1><p>Giữ nguyên PO/SO và tự hiển thị chỉ lệnh đã ghép theo PO + mã hàng + màu; dòng chưa duy nhất sẽ hiện trạng thái chưa ghép.</p></div><button className="button button-primary" onClick={onAdd}><Plus size={16} /> Thêm đơn hàng</button></div>
     <div className="metric-strip"><MetricInline label="TỔNG CHỈ LỆNH" value={money(allOrders.length)} /><MetricInline label="SL ĐƠN HÀNG" value={money(plannedTotal)} /><MetricInline label="SL ĐÃ PHÁT LỆNH SX" value={money(releasedTotal)} /><MetricInline label="MÃ HÀNG - MÀU" value={money(new Set(allOrders.map((order) => productKey(order.model, order.color))).size)} /></div>
     <section className="panel table-panel page-table-panel"><div className="table-toolbar"><div className="search-input"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm mã đơn, mã hàng, màu..." /></div><div className="toolbar-right"><div className="filter-pills">{['Tất cả', 'Đang chạy', 'Chờ sản xuất'].map((label) => <button key={label} className={filter === label ? 'selected' : ''} onClick={() => setFilter(label)}>{label}</button>)}</div><button className="icon-button"><Filter size={17} /></button></div></div>
-      {orders.length ? <div className="table-scroll"><table className="orders-table">{hasSourceProgress ? <><thead><tr><th>CHỈ LỆNH / PO</th><th>MÃ HÀNG & MÀU</th><th>KHÁCH HÀNG</th><th className="numeric">SL ĐƠN</th><th className="numeric">SL LỆNH SX</th><th className="numeric">CHẶT · LAF/HM</th><th className="numeric">MAY · LVF/HM</th><th className="numeric">GÒ · LVF/HM</th><th className="numeric">NHẬP KHO</th><th className="numeric">GIAO HÀNG</th><th>TRẠNG THÁI</th></tr></thead><tbody>{orders.map((order) => <tr key={orderKey(order)}><td><strong>{resolvedOrderNo(order, orderContext) || 'Chưa ghép chỉ lệnh'}</strong><small>{order.purchaseOrder || order.sourceSheet || '—'}</small></td><td><span className="product-code">{order.model}</span><small>{order.color}</small></td><td>{order.customer || '—'}</td><td className="numeric">{money(order.plannedQty)}</td><td className="numeric strong-cell">{money(order.productionQty)}</td><td className="numeric">{money(order.stageQuantities?.LAF_CUT || 0)}</td><td className="numeric">{money(order.stageQuantities?.LVF_SEW || 0)}</td><td className="numeric">{money(order.stageQuantities?.LVF_GO || 0)}</td><td className="numeric">{money(order.stageQuantities?.RECEIVED || 0)}</td><td className="numeric">{money(order.stageQuantities?.SHIPPED || 0)}</td><td><StatusBadge status={order.productionQty > 0 ? 'Đang sản xuất' : order.status || 'Chờ sản xuất'} /></td></tr>)}</tbody></> : <><thead><tr><th>CHỈ LỆNH / PO</th><th>MÃ HÀNG & MÀU SẮC</th><th>NHÀ MÁY</th><th className="numeric">SL KẾ HOẠCH</th>{PLANTS.map((plant) => <th className="numeric" key={plant.id}>WIP {plant.short}</th>)}<th className="numeric">CÒN LẠI</th><th>TRẠNG THÁI</th></tr></thead><tbody>{orders.map((order) => {
+      {orders.length ? <div className="table-scroll"><table className="orders-table">{hasSourceProgress ? <><thead><tr><th>CHỈ LỆNH / PO</th><th>MÃ HÀNG & MÀU</th><th>KHÁCH HÀNG</th><th className="numeric">SL ĐƠN</th><th className="numeric">SL LỆNH SX</th><th className="numeric">CHẶT · LAF/HM</th><th className="numeric">MAY · LVF/HM</th><th className="numeric">GÒ · LVF/HM</th><th className="numeric">ĐÓNG THÙNG</th><th className="numeric">NHẬP KHO</th><th className="numeric">GIAO HÀNG</th><th>TRẠNG THÁI</th></tr></thead><tbody>{orders.map((order) => <tr key={orderKey(order)}><td><strong>{resolvedOrderNo(order, orderContext) || 'Chưa ghép chỉ lệnh'}</strong><small>{order.purchaseOrder || order.sourceSheet || '—'}</small></td><td><span className="product-code">{order.model}</span><small>{order.color}</small></td><td>{order.customer || '—'}</td><td className="numeric">{money(order.plannedQty)}</td><td className="numeric strong-cell">{money(order.productionQty)}</td><td className="numeric">{money(order.stageQuantities?.LAF_CUT || 0)}</td><td className="numeric">{money(order.stageQuantities?.LVF_SEW || 0)}</td><td className="numeric">{money(order.stageQuantities?.LVF_GO || 0)}</td><td className="numeric">{money(order.stageQuantities?.PACKED || 0)}</td><td className="numeric">{money(order.stageQuantities?.RECEIVED || 0)}</td><td className="numeric">{money(order.stageQuantities?.SHIPPED || 0)}</td><td><StatusBadge status={order.productionQty > 0 ? 'Đang sản xuất' : order.status || 'Chờ sản xuất'} /></td></tr>)}</tbody></> : <><thead><tr><th>CHỈ LỆNH / PO</th><th>MÃ HÀNG & MÀU SẮC</th><th>NHÀ MÁY</th><th className="numeric">SL KẾ HOẠCH</th>{PLANTS.map((plant) => <th className="numeric" key={plant.id}>WIP {plant.short}</th>)}<th className="numeric">CÒN LẠI</th><th>TRẠNG THÁI</th></tr></thead><tbody>{orders.map((order) => {
         const done = Object.values(order.progress || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
         const remaining = Math.max(0, (Number(order.plannedQty) || 0) - done);
         return <tr key={orderKey(order)}><td><strong>{resolvedOrderNo(order, orderContext) || 'Chưa ghép chỉ lệnh'}</strong><small>{order.purchaseOrder || order.sourceSheet || 'Nhập trực tiếp'}</small></td><td><span className="product-code">{order.model}</span><small>{order.color} · {order.colorName || '—'}</small></td><td>{order.plant ? <PlantTag plantId={order.plant} /> : '—'}</td><td className="numeric">{money(order.plannedQty)}</td>{PLANTS.map((plant) => <td className="numeric" key={plant.id}><NumberInput className="cell-input numeric-input" value={order.progress?.[plant.id] ?? 0} onSave={(value) => onProgress(order, plant.id, value)} /></td>)}<td className="numeric strong-cell">{money(remaining)}</td><td><StatusBadge status={done ? 'Đang sản xuất' : order.status || 'Chờ sản xuất'} /></td></tr>;

@@ -23,7 +23,6 @@ async function main() {
   const tdPath = path.join(realDataDir, 'TIEN-DO-SX-DONHANG.xlsx');
   const hmPath = path.join(realDataDir, 'DM-MATHANG-HOAMAU LAF-CANLUYEN.xlsx');
   const wbPath = path.join(realDataDir, 'Mau_01_Thong_Ke_Xuong_Doi_Chieu_Kiem_Ke-v4_tu_dong_phan_bo_theo_nha_may_da_sua_loi.xlsx');
-  const dhPath = path.join(realDataDir, 'DON HANG.xlsx');
   const poIssuePath = path.join(realDataDir, 'chi tiet vat tu thuc xuat theo so po.xlsx');
   const bomDemandPath = path.join(realDataDir, 'DM NHU CAU THEO BOM.xlsx');
 
@@ -33,7 +32,6 @@ async function main() {
   const invHm = await importTaskWorkbook('inventory:HOA_MAU', fileFromDisk(wbPath, 'Mau_01_Thong_Ke_Xuong_Doi_Chieu_Kiem_Ke.xlsx'));
   const invLaf = await importTaskWorkbook('inventory:LAF', fileFromDisk(wbPath, 'Mau_01_Thong_Ke_Xuong_Doi_Chieu_Kiem_Ke.xlsx'));
   const invLvf = await importTaskWorkbook('inventory:LVF', fileFromDisk(wbPath, 'Mau_01_Thong_Ke_Xuong_Doi_Chieu_Kiem_Ke.xlsx'));
-  const dh = await importTaskWorkbook('orders', fileFromDisk(dhPath, 'DON HANG.xlsx'));
   const counts = await readWorkshopCounts(fileFromDisk(wbPath, 'Mau_01_Thong_Ke_Xuong_Doi_Chieu_Kiem_Ke.xlsx'));
   const poIssues = fs.existsSync(poIssuePath) ? await readMaterialIssueWorkbook(fileFromDisk(poIssuePath, 'chi tiet vat tu thuc xuat theo so po.xlsx')) : { rows: [] };
   const bomDemand = fs.existsSync(bomDemandPath)
@@ -79,7 +77,7 @@ async function main() {
     materials: wb.materials,
     bom: wb.bom,
     norms: wb.norms,
-    orders: dh.orders,
+    orders: [],
     productionOrders,
     productMappings: [],
     orderMappings: [],
