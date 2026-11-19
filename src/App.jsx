@@ -12,11 +12,13 @@ import { supabase, cloudMode } from './lib/supabase.js';
 import { ensureWorkspace, loadWorkspaceRecords, saveWorkspaceRecords } from './lib/cloud.js';
 import { calculateInventorySnapshot, readIssuedWorkbook, createIssuedTemplate, createSnapshotWorkbook, readCountWorkbook, readWorkshopCounts, createCountTemplate, compareSnapshotCounts, mergeRowsByMaterialName, readMaterialIssueWorkbook, readBomDemandWorkbook, buildStageExplanationRows, classifyWarehouseIssues } from './lib/inventory-snapshot.js';
 import { fetchRealDataBundle } from './lib/real-data.js';
+import { readWorkshopWipReport, reconcileWorkshopWip, createWipReconcileWorkbook } from './lib/wip-reconcile.js';
 
-const emptyData = () => ({ materials: [], bom: [], orders: [], productionOrders: [], productMappings: [], orderMappings: [], chemicalNorms: [], importMeta: {}, inventory: {}, norms: [], workshopCounts: null, materialIssues: [] });
+const emptyData = () => ({ materials: [], bom: [], orders: [], productionOrders: [], productMappings: [], orderMappings: [], chemicalNorms: [], importMeta: {}, inventory: {}, norms: [], workshopCounts: null, materialIssues: [], workshopWipReports: [], confirmedWip: null });
 const navItems = [
   { id: 'overview', label: 'Tổng quan', icon: Gauge },
   { id: 'snapshot', label: 'Tồn theo đơn dở dang', icon: ClipboardCheck },
+  { id: 'wip-reconcile', label: 'Đối chiếu dở dang', icon: ArrowLeftRight },
   { id: 'guide', label: 'Hướng dẫn & Sơ đồ', icon: GitBranch },
   { id: 'orders', label: 'Đơn hàng', icon: Layers3 },
   { id: 'data-entry', label: 'Tác vụ nhập liệu', icon: ClipboardList },
@@ -102,7 +104,7 @@ function App() {
             const hasLegacyDonHangOrders = (saved.orders?.length || 0) > 0 && (saved.productionOrders?.length || 0) > 0;
             const needsSync = isNewerBundle || !(saved.materialIssues?.length) || !saved.importMeta?.['chemical-norms:LVF'] || needsMaterialColorUpgrade || hasLegacyDonHangOrders;
             if (alive && needsSync && (bundled.productionOrders?.length || bundled.materialIssues?.length || bundled.chemicalNorms?.length)) {
-              const updated = { ...emptyData(), ...bundled };
+              const updated = { ...emptyData(), ...bundled, confirmedWip: saved.confirmedWip || null };
               await saveLocalState(updated);
               setData(updated);
               return;
@@ -140,7 +142,7 @@ function App() {
       try {
         const bundled = await fetchRealDataBundle();
         if (bundled.bundleGeneratedAt && bundled.bundleGeneratedAt !== data.bundleGeneratedAt) {
-          const updated = { ...emptyData(), ...bundled };
+          const updated = { ...emptyData(), ...bundled, confirmedWip: data.confirmedWip || null };
           await saveLocalState(updated);
           setData(updated);
           notify('Đã tự động đồng bộ dữ liệu mới nhất từ ổ O:.');
@@ -519,6 +521,25 @@ function App() {
     await commit(next, ['chemical_norm', 'import_meta']);
   };
 
+  const saveWorkshopWipReports = async (rows, sourceName) => {
+    const next = {
+      ...data,
+      workshopWipReports: rows,
+      importMeta: {
+        ...data.importMeta,
+        'workshop-wip-report': { taskId: 'workshop-wip-report', sourceFile: sourceName, importedAt: new Date().toISOString(), rowCount: rows.length },
+      },
+    };
+    await commit(next, ['import_meta']);
+    notify(`Đã nạp ${rows.length} dòng báo cáo dở dang thực tế từ ${sourceName}.`);
+  };
+
+  const saveConfirmedWip = async (confirmedWip) => {
+    const next = { ...data, confirmedWip };
+    await commit(next, ['import_meta']);
+    notify(confirmedWip?.active ? 'Đã chốt số đôi dở dang LAF/LVF và áp dụng tính kiểm kê 4 kho.' : 'Đã hủy áp dụng số chốt; hệ thống quay về tính theo tiến độ ERP.');
+  };
+
   const signOut = async () => { if (supabase) await supabase.auth.signOut(); };
 
   if (!cloudMode && localLoading) return <LoadingScreen label="Đang tải dữ liệu kho xưởng" />;
@@ -570,7 +591,8 @@ function App() {
           {page === 'overview' && <Dashboard data={data} setPage={setPageSafe} onOpenWarehouse={openWarehouseSnapshot} />}
           {page === 'guide' && <GuidePage data={data} setPage={setPageSafe} onOpenWarehouse={openWarehouseSnapshot} />}
           {page === 'orders' && <OrdersPage data={data} onAdd={() => setModal('order')} onProgress={updateOrderProgress} />}
-          {page === 'snapshot' && <SnapshotPage data={data} selectedWarehouse={selectedWarehouse} setWarehouse={setSelectedWarehouse} onSaveCounts={saveWorkshopCounts} onSaveMaterialIssues={saveMaterialIssues} onSaveBomDemand={saveBomDemand} />}
+          {page === 'snapshot' && <SnapshotPage data={data} selectedWarehouse={selectedWarehouse} setWarehouse={setSelectedWarehouse} onSaveCounts={saveWorkshopCounts} onSaveMaterialIssues={saveMaterialIssues} onSaveBomDemand={saveBomDemand} onOpenReconcile={() => setPageSafe('wip-reconcile')} />}
+          {page === 'wip-reconcile' && <WipReconcilePage data={data} onImportReport={saveWorkshopWipReports} onSaveConfirmed={saveConfirmedWip} onOpenWarehouse={openWarehouseSnapshot} />}
           {page === 'catalog' && <CatalogPage data={data} tab={catalogTab} setTab={setCatalogTab} onAddMaterial={() => setModal('material')} onAddBom={() => setModal('bom')} />}
           {page === 'norms' && <NormsPage data={data} onAdd={() => setModal('norm')} />}
           {page === 'data-entry' && <DataTasksPage data={data} onImport={importTask} onExport={exportTask} onLoadReal={loadRealDataset} busyTask={busyTask} taskErrors={taskErrors} onOpen={(taskId) => {
@@ -1153,7 +1175,7 @@ function InventoryPage({ data, rows, selectedPlant, setPlant, onUpdate }) {
   </>;
 }
 
-function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts, onSaveMaterialIssues, onSaveBomDemand }) {
+function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts, onSaveMaterialIssues, onSaveBomDemand, onOpenReconcile }) {
   const localNow = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
   const [asOf, setAsOf] = useState(localNow);
   const [mode, setMode] = useState('planned');
@@ -1214,9 +1236,16 @@ function SnapshotPage({ data, selectedWarehouse, setWarehouse, onSaveCounts, onS
     if (customCounts) setCustomCounts({ ...customCounts, rows: filtered });
     if (onSaveCounts) await onSaveCounts(nextPayload);
   };
-  const exportResult = async () => { try { const bytes=await createSnapshotWorkbook(calc,{asOf,warehouse:selectedWarehouseInfo?.name,warehouseId:selectedWarehouse,modeLabel:labels[mode],groupByName,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone,progressSource:data.importMeta?.['production-orders']?.sourceFile || '',normSource:data.importMeta?.['chemical-norms:' + selectedWarehouse]?.sourceFile || 'BOM hoặc nguồn chưa ghi tên',issuedSource:issuedFile,countSource:countFile + (countNotes ? ' | ' + Object.values(countNotes.dates).join(' | ') + ' | Lưu ý: mốc đếm có thể khác mốc tiến độ; đối chiếu chỉ tạm tính.' : ''),comparison: comparison ? displaySummary : null,summaryRows: displaySummary,productionOrders:data.productionOrders || [],materialIssues,lvfStage}); download(bytes,`Ton_kiem_ke_${selectedWarehouse}.xlsx`); setError(''); } catch(e) {setError(e.message || 'Không xuất được file.');} };
+  const exportResult = async () => { try { const effectiveModeLabel = data.confirmedWip?.active && mode !== 'issued' ? `Số dở dang đã chốt LAF/LVF (${data.confirmedWip.confirmedAt ? new Date(data.confirmedWip.confirmedAt).toLocaleString('vi-VN') : ''})` : labels[mode]; const bytes=await createSnapshotWorkbook(calc,{asOf,warehouse:selectedWarehouseInfo?.name,warehouseId:selectedWarehouse,modeLabel:effectiveModeLabel,groupByName,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone,progressSource:data.importMeta?.['production-orders']?.sourceFile || '',normSource:data.importMeta?.['chemical-norms:' + selectedWarehouse]?.sourceFile || 'BOM hoặc nguồn chưa ghi tên',issuedSource:issuedFile,countSource:countFile + (countNotes ? ' | ' + Object.values(countNotes.dates).join(' | ') + ' | Lưu ý: mốc đếm có thể khác mốc tiến độ; đối chiếu chỉ tạm tính.' : ''),comparison: comparison ? displaySummary : null,summaryRows: displaySummary,productionOrders:data.productionOrders || [],materialIssues,lvfStage}); download(bytes,`Ton_kiem_ke_${selectedWarehouse}.xlsx`); setError(''); } catch(e) {setError(e.message || 'Không xuất được file.');} };
   return <>
     <div className="page-heading"><div><div className="eyebrow">KIỂM KÊ <span>•</span> THEO ĐƠN DỞ DANG 4 KHO</div><h1>Tồn lý thuyết theo định mức</h1><p>Chặt (S − U) → Kho xưởng LAF & Hóa mẫu LAF · May/Gò (S − V/W) → Kho xưởng LVF & Hóa mẫu LVF.</p></div><button className="button button-secondary" disabled={!calc.ready || !asOf || (mode === 'issued' && !issuedRows.length)} onClick={exportResult}><ArrowDownToLine size={16} /> Xuất kết quả Excel</button></div>
+    {data.confirmedWip?.active && mode !== 'issued' && (
+      <div className="task-guidance" style={{ marginBottom: 12, borderColor: 'var(--accent, #0ea5e9)' }}>
+        <ShieldCheck size={18} />
+        <span><strong>Đang áp dụng số lượng đôi dở dang ĐÃ CHỐT (LAF & LVF)</strong> từ tab Đối chiếu dở dang ({Object.keys(data.confirmedWip.rows || {}).length} chỉ lệnh chốt lúc {data.confirmedWip.confirmedAt ? new Date(data.confirmedWip.confirmedAt).toLocaleString('vi-VN') : '—'}). Báo cáo kiểm kê đang tính theo số đã chốt này.</span>
+        {onOpenReconcile && <button type="button" className="text-button" onClick={onOpenReconcile}>Xem / Chỉnh số chốt →</button>}
+      </div>
+    )}
     <div className="plant-tabs warehouse-tabs">{WAREHOUSES.map(w => <button key={w.id} className={selectedWarehouse === w.id ? 'active' : ''} onClick={() => { setWarehouse(w.id); setSelected(null); }}><span className={`plant-dot ${w.color}`} />{w.name}</button>)}</div>
     <div className="task-guidance"><FileSpreadsheet size={18}/><span><strong>Quy tắc công đoạn:</strong> Chặt (cột U) tương ứng dở dang của <strong>Kho xưởng LAF</strong> và <strong>Kho Hóa mẫu LAF</strong>; May (cột V) & Gò (cột W) tương ứng dở dang của <strong>Kho xưởng LVF</strong> và <strong>Kho Hóa mẫu LVF</strong>. Dở dang = Cơ sở − Đã sản xuất tại công đoạn.</span></div>
     <section className="panel" style={{padding:20,marginBottom:16}}><div className="form-grid">
@@ -1402,6 +1431,265 @@ function SetupModal({ onClose }) {
   return <ModalShell title="Kết nối dữ liệu dùng chung" subtitle="Cần một dự án Supabase để nhiều người và nhà máy dùng chung dữ liệu." onClose={onClose}><div className="setup-steps"><div><b>1</b><span>Tạo project Supabase và chạy file <code>supabase/schema.sql</code> trong SQL Editor.</span></div><div><b>2</b><span>Tạo tài khoản người dùng trong Supabase Auth.</span></div><div><b>3</b><span>Thêm biến <code>VITE_SUPABASE_URL</code> và <code>VITE_SUPABASE_ANON_KEY</code> trong Vercel Project Settings.</span></div><div><b>4</b><span>Redeploy. Người đăng nhập đầu tiên sẽ có workspace riêng; dữ liệu được giới hạn bằng RLS.</span></div></div><p className="setup-footnote">Bản đang chạy lưu dữ liệu trong trình duyệt. Chưa nhập dữ liệu thật vào dịch vụ bên thứ ba.</p><div className="modal-actions"><button className="button button-primary" onClick={onClose}>Đã hiểu</button></div></ModalShell>;
 }
 
+function WipReconcilePage({ data, onImportReport, onSaveConfirmed, onOpenWarehouse }) {
+  const [plantFilter, setPlantFilter] = useState('Tất cả');
+  const [statusFilter, setStatusFilter] = useState('Tất cả');
+  const [query, setQuery] = useState('');
+  const [error, setError] = useState('');
+  const [draftMap, setDraftMap] = useState(() => ({ ...(data.confirmedWip?.rows || {}) }));
+
+  useEffect(() => {
+    setDraftMap({ ...(data.confirmedWip?.rows || {}) });
+  }, [data.confirmedWip]);
+
+  const prodOrders = useMemo(
+    () => currentImportedRows(data.productionOrders, data.importMeta, 'production-orders'),
+    [data.productionOrders, data.importMeta]
+  );
+  const reconcile = useMemo(
+    () => reconcileWorkshopWip(prodOrders, data.workshopWipReports || [], draftMap),
+    [prodOrders, data.workshopWipReports, draftMap]
+  );
+
+  const visibleRows = useMemo(() => reconcile.rows.filter((r) => {
+    if (plantFilter !== 'Tất cả' && r.plant !== plantFilter) return false;
+    if (statusFilter === 'Chỉ xem sai lệch' && r.status === 'Khớp') return false;
+    if (statusFilter === 'Khớp' && r.status !== 'Khớp') return false;
+    if (statusFilter === 'Xưởng chưa báo' && r.status !== 'Hệ thống có dở dang — Xưởng chưa báo') return false;
+    if (statusFilter === 'Xưởng báo lệch số' && !r.status.startsWith('Xưởng báo')) return false;
+    const q = query.trim().toLowerCase();
+    if (q && !`${r.orderNo} ${r.po} ${r.so} ${r.model} ${r.color} ${r.plant} ${r.status}`.toLowerCase().includes(q)) return false;
+    return true;
+  }), [reconcile.rows, plantFilter, statusFilter, query]);
+
+  const download = (bytes, name) => {
+    const u = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    const a = document.createElement('a');
+    a.href = u;
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(u), 1000);
+  };
+
+  const handleImport = async (file) => {
+    try {
+      const parsed = await readWorkshopWipReport(file);
+      await onImportReport(parsed.rows, file.name);
+      setError('');
+    } catch (e) {
+      setError(e.message || 'Không đọc được file báo cáo dở dang xưởng.');
+    }
+  };
+
+  const handleExport = async () => {
+    try {
+      const bytes = await createWipReconcileWorkbook(reconcile, {
+        confirmedActive: Boolean(data.confirmedWip?.active),
+        confirmedAt: data.confirmedWip?.confirmedAt ? new Date(data.confirmedWip.confirmedAt).toLocaleString('vi-VN') : '',
+      });
+      download(bytes, 'Doi_chieu_do_dang_HeThong_vs_Xuong.xlsx');
+      setError('');
+    } catch (e) {
+      setError(e.message || 'Không xuất được file báo cáo đối chiếu.');
+    }
+  };
+
+  const fillDraftFrom = (source) => {
+    const next = {};
+    for (const r of reconcile.rows) {
+      if (source === 'workshop') {
+        if (r.reportedWip !== null) next[r.key] = r.reportedWip;
+      } else {
+        if (r.systemWip > 0) next[r.key] = r.systemWip;
+      }
+    }
+    setDraftMap(next);
+  };
+
+  const updateRowDraft = (rowKey, rawVal) => {
+    const trimmed = String(rawVal ?? '').trim();
+    setDraftMap((prev) => {
+      const next = { ...prev };
+      if (trimmed === '') {
+        delete next[rowKey];
+      } else {
+        const n = Number(trimmed.replace(',', '.'));
+        if (Number.isFinite(n) && n >= 0) next[rowKey] = n;
+      }
+      return next;
+    });
+  };
+
+  const applyConfirmed = async () => {
+    const clean = {};
+    for (const [k, v] of Object.entries(draftMap)) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 0) clean[k] = n;
+    }
+    if (!Object.keys(clean).length) {
+      setError('Chưa có dòng nào có số lượng chốt > 0. Hãy bấm "Điền chốt = Xưởng báo cáo" hoặc nhập số chốt rồi bấm Chốt.');
+      return;
+    }
+    setError('');
+    await onSaveConfirmed({ active: true, confirmedAt: new Date().toISOString(), rows: clean });
+  };
+
+  const cancelConfirmed = async () => {
+    await onSaveConfirmed({ active: false, confirmedAt: '', rows: draftMap });
+  };
+
+  const isActive = Boolean(data.confirmedWip?.active);
+  const draftCount = Object.values(draftMap).filter((v) => Number(v) > 0).length;
+  const draftTotal = Object.values(draftMap).reduce((s, v) => s + (Number(v) > 0 ? Number(v) : 0), 0);
+
+  return <>
+    <div className="page-heading">
+      <div>
+        <div className="eyebrow">KIỂM SOÁT SỐ LIỆU <span>•</span> ĐỐI CHIẾU DỞ DANG LAF & LVF</div>
+        <h1>Đối chiếu số lượng dở dang: Hệ thống vs Xưởng báo cáo</h1>
+        <p>So sánh số đôi dở dang từ ERP (<code>TIEN-DO-SX-DONHANG.xlsx</code>) với báo cáo thực tế của xưởng (<code>DON HANG DO DANG THUC TE XUONG BAO CAO.xlsx</code>). Sau khi rà soát và chốt số đúng, đẩy số chốt vào lõi kiểm kê 4 kho.</p>
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button className="button button-secondary" onClick={handleExport}><ArrowDownToLine size={16} /> Xuất báo cáo đối chiếu</button>
+        <button className="button button-primary" onClick={applyConfirmed}><Check size={16} /> Chốt số & Áp dụng tính kiểm kê ({money(draftCount)} lệnh)</button>
+      </div>
+    </div>
+
+    {isActive ? (
+      <div className="task-guidance" style={{ marginBottom: 14, borderColor: 'var(--accent, #0ea5e9)' }}>
+        <ShieldCheck size={18} />
+        <span><strong>Đang áp dụng số dở dang đã chốt</strong> ({Object.keys(data.confirmedWip.rows || {}).length} chỉ lệnh · chốt lúc {data.confirmedWip.confirmedAt ? new Date(data.confirmedWip.confirmedAt).toLocaleString('vi-VN') : '—'}) cho toàn bộ tính toán kiểm kê LAF & LVF.</span>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button type="button" className="text-button" onClick={() => onOpenWarehouse('LAF')}>Mở kiểm kê LAF →</button>
+          <button type="button" className="text-button" onClick={() => onOpenWarehouse('LVF')}>Mở kiểm kê LVF →</button>
+          <button type="button" className="text-button" onClick={cancelConfirmed}>Hủy chốt (về tiến độ ERP)</button>
+        </div>
+      </div>
+    ) : (
+      <div className="mapping-warning" style={{ marginBottom: 14 }}>
+        <CircleAlert size={16} />
+        <span><strong>Chưa chốt số dở dang:</strong> Hệ thống kiểm kê 4 kho hiện đang tính theo tiến độ ERP gốc. Hãy rà soát bảng sai lệch bên dưới, điền cột <strong>Số chốt kiểm kê</strong> và bấm <strong>Chốt số & Áp dụng tính kiểm kê</strong> để đẩy số đúng cho LAF và LVF.</span>
+      </div>
+    )}
+
+    <div className="metric-strip" style={{ marginBottom: 16 }}>
+      <MetricInline label="TỔNG CHỈ LỆNH ĐỐI CHIẾU" value={money(reconcile.summary.count)} />
+      <MetricInline label="KHỚP HOÀN TOÀN" value={money(reconcile.summary.matched)} />
+      <MetricInline label="CÓ SAI LỆCH / THIẾU BÁO" value={money(reconcile.summary.mismatch)} />
+      <MetricInline label="DỞ DANG HỆ THỐNG (ĐÔI)" value={money(reconcile.summary.systemWipTotal)} />
+      <MetricInline label="DỞ DANG XƯỞNG BÁO (ĐÔI)" value={money(reconcile.summary.reportedWipTotal)} />
+      <MetricInline label="ĐANG CHỌN CHỐT (ĐÔI)" value={money(draftTotal)} />
+    </div>
+
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 12, marginBottom: 16 }}>
+      {['LAF', 'LVF'].map((p) => {
+        const b = reconcile.byPlant[p];
+        const d = b.reportedWipTotal - b.systemWipTotal;
+        return (
+          <section className="panel" key={p} style={{ padding: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <strong>Nhà máy {p} ({p === 'LAF' ? 'Chặt: S − U' : 'Gò: S − W'})</strong>
+              <span className="plant-tag">{money(b.matched)}/{money(b.count)} khớp</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, fontSize: 13 }}>
+              <div><small style={{ display: 'block', opacity: 0.7 }}>Hệ thống</small><strong>{money(b.systemWipTotal)} đôi</strong></div>
+              <div><small style={{ display: 'block', opacity: 0.7 }}>Xưởng báo</small><strong>{money(b.reportedWipTotal)} đôi</strong></div>
+              <div><small style={{ display: 'block', opacity: 0.7 }}>Chênh lệch</small><strong className={d < 0 ? 'text-danger' : d > 0 ? 'text-warning' : ''}>{d > 0 ? `+${money(d)}` : money(d)} đôi</strong></div>
+            </div>
+          </section>
+        );
+      })}
+    </div>
+
+    <section className="panel" style={{ padding: 16, marginBottom: 16 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+          <label className="button button-secondary button-small upload-control">
+            <Upload size={14} /> Import file Xưởng báo cáo (.xlsx)
+            <input type="file" accept=".xlsx,.xlsm" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.target.value = ''; }} />
+          </label>
+          <button type="button" className="button button-secondary button-small" onClick={() => fillDraftFrom('workshop')}>Điền chốt = Xưởng báo cáo</button>
+          <button type="button" className="button button-secondary button-small" onClick={() => fillDraftFrom('system')}>Điền chốt = Hệ thống (ERP)</button>
+          <button type="button" className="text-button" onClick={() => setDraftMap({})}>Xóa nháp chốt</button>
+        </div>
+        <span className="helper-label">Đã nạp {money((data.workshopWipReports || []).length)} dòng báo cáo xưởng</span>
+      </div>
+      {error && <div className="mapping-warning" style={{ marginTop: 10 }}><CircleAlert size={16} />{error}</div>}
+    </section>
+
+    <section className="panel table-panel page-table-panel">
+      <div className="table-toolbar" style={{ flexWrap: 'wrap', gap: 10 }}>
+        <div className="filter-pills">
+          {['Tất cả', 'LAF', 'LVF'].map((p) => (
+            <button key={p} type="button" className={plantFilter === p ? 'selected' : ''} onClick={() => setPlantFilter(p)}>{p}</button>
+          ))}
+        </div>
+        <div className="filter-pills">
+          {['Tất cả', 'Chỉ xem sai lệch', 'Khớp', 'Xưởng chưa báo', 'Xưởng báo lệch số'].map((st) => (
+            <button key={st} type="button" className={statusFilter === st ? 'selected' : ''} onClick={() => setStatusFilter(st)}>{st}</button>
+          ))}
+        </div>
+        <div className="search-input">
+          <Search size={16} />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Tìm chỉ lệnh, PO, mã hàng, màu..." />
+        </div>
+      </div>
+
+      {visibleRows.length ? (
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>NHÀ MÁY</th>
+                <th>CHỈ LỆNH / PO</th>
+                <th>MÃ HÀNG & MÀU</th>
+                <th className="numeric">SL ĐẶT (HT)</th>
+                <th className="numeric">ĐÃ SX (HT)</th>
+                <th className="numeric">DỞ DANG HỆ THỐNG</th>
+                <th className="numeric">DỞ DANG XƯỞNG BÁO</th>
+                <th className="numeric">CHÊNH LỆCH (XƯỞNG − HT)</th>
+                <th>TRẠNG THÁI ĐỐI CHIẾU</th>
+                <th className="numeric">SỐ CHỐT KIỂM KÊ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleRows.map((r) => (
+                <tr key={r.key}>
+                  <td><span className="plant-tag">{r.plant}</span><small>{r.cutoffDate || r.stageLabel}</small></td>
+                  <td><strong>{r.orderNo}</strong><small>{r.po || r.so || '—'}</small></td>
+                  <td><strong>{r.model || '—'}</strong><small>{r.color || '—'}</small></td>
+                  <td className="numeric">{money(r.systemPlanned)}</td>
+                  <td className="numeric">{money(r.systemDone)}</td>
+                  <td className="numeric strong-cell">{money(r.systemWip)}</td>
+                  <td className="numeric strong-cell">{r.reportedWip === null ? '—' : money(r.reportedWip)}</td>
+                  <td className={`numeric strong-cell ${r.diff === null ? '' : r.diff < -0.0001 ? 'text-danger' : r.diff > 0.0001 ? 'text-warning' : ''}`}>
+                    {r.diff === null ? '—' : r.diff > 0 ? `+${money(r.diff)}` : money(r.diff)}
+                  </td>
+                  <td><StatusBadge status={r.status} /></td>
+                  <td className="numeric">
+                    <NumberInput
+                      className="cell-input numeric-input count-input"
+                      placeholder="Nhập chốt"
+                      value={draftMap[r.key] ?? ''}
+                      onSave={(val) => updateRowDraft(r.key, val)}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <EmptyInline text="Không có dòng đối chiếu phù hợp với bộ lọc hiện tại." />
+      )}
+      <div className="table-footnote">
+        <span>Mẹo: Bấm "Điền chốt = Xưởng báo cáo" rồi chỉnh tay các dòng sai lệch, sau đó bấm "Chốt số & Áp dụng tính kiểm kê" để đẩy số sang 4 kho.</span>
+        <span>Hiển thị {money(visibleRows.length)} / {money(reconcile.rows.length)} dòng</span>
+      </div>
+    </section>
+  </>;
+}
+
 function GuidePage({ data, setPage, onOpenWarehouse }) {
   const countRows = data.workshopCounts?.rows || [];
   const countedByWh = {
@@ -1507,6 +1795,12 @@ function GuidePage({ data, setPage, onOpenWarehouse }) {
       sheet: '2_Kho_Hoa_Mau · 3_Kho_Xuong_LAF · 4_Kho_Xuong_LVF',
       columns: 'STT danh mục (cột B), Kiểm kê thực tế (cột M), Phân kho Hóa mẫu LAF/LVF (cột T tại sheet 2_Kho_Hoa_Mau)',
       purpose: 'Nạp số liệu kiểm đếm thực tế hiện trường cho đủ 4 kho (giữ nguyên phân biệt giữa ô trống = Chưa đếm và số 0 thực tế) để tính Chênh lệch tạm tính so với tồn lý thuyết dở dang.',
+    },
+    {
+      file: 'DON HANG DO DANG THUC TE XUONG BAO CAO.xlsx',
+      sheet: 'DATA',
+      columns: 'Chỉ lệnh (cột C), Mã SO (D), Mã PO# (E), Mã hàng (F), Mã màu (G), SL đặt hàng (I), Gò (N), Số lượng dở dang kỳ kiểm kê (O), Nhà máy LAF/LVF (P), Ngày chốt (Q)',
+      purpose: 'Đối chiếu số đôi dở dang xưởng thực tế báo cáo với số dở dang hệ thống ERP tại tab Đối chiếu dở dang. Sau khi rà soát sai lệch và bấm Chốt số, hệ thống đẩy số đôi dở dang đã chốt cho LAF/LVF để làm cơ sở xuất báo cáo kiểm kê 4 kho.',
     },
   ];
 

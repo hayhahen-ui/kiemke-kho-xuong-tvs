@@ -308,3 +308,33 @@ test('calculateInventorySnapshot uses per-order chemicalNorms for LAF and LVF (b
  assert.equal(goRow.basisQty,90);
  assert.equal(goRow.quantity,45);
 });
+test('reconcileWorkshopWip detects mismatches and confirmedWip overrides calculateInventorySnapshot',async()=>{
+ const { reconcileWorkshopWip, createWipReconcileWorkbook } = await import('./wip-reconcile.js');
+ const prod=[
+  {orderNo:'ADIDA2611-0101',purchaseOrder:'PO1',model:'NVQ89',color:'LC1783',plannedQty:578,stageQuantities:{LAF_CUT:578,LVF_SEW:513,LVF_GO:513,PACKED:0,RECEIVED:0}},
+  {orderNo:'ADIDA1120-0074',purchaseOrder:'PO2',model:'NVQ89',color:'LC1783',plannedQty:681,stageQuantities:{LAF_CUT:100,LVF_SEW:324,LVF_GO:324,PACKED:0,RECEIVED:0}},
+ ];
+ const reported=[
+  {orderNo:'ADIDA2611-0101',plant:'LVF',reportedWip:65},
+  {orderNo:'ADIDA1120-0074',plant:'LAF',reportedWip:681},
+ ];
+ const rec=reconcileWorkshopWip(prod,reported);
+ const lvfMatch=rec.rows.find(r=>r.plant==='LVF'&&r.orderNo==='ADIDA2611-0101');
+ const lafDiff=rec.rows.find(r=>r.plant==='LAF'&&r.orderNo==='ADIDA1120-0074');
+ assert.equal(lvfMatch.status,'Khớp');
+ assert.equal(lafDiff.status,'Xưởng báo cao hơn hệ thống');
+ assert.equal(lafDiff.diff,324);
+ const xl=await createWipReconcileWorkbook(rec,{confirmedActive:true});
+ const wb=new ExcelJS.Workbook(); await wb.xlsx.load(xl);
+ assert.deepEqual(wb.worksheets.map(s=>s.name),['TongHop_DoiChieu','ChiTiet_SaiLech','ToanBo_DoiChieu']);
+ // Apply confirmedWip to calculateInventorySnapshot
+ const calc=calculateInventorySnapshot({
+  ...data,
+  productionOrders:[{orderNo:'DH_CONF',purchaseOrder:'PO_C',model:'M1',color:'X',plannedQty:500,productionQty:500,stageQuantities:{LAF_CUT:100,LVF_SEW:0,LVF_GO:0,PACKED:0,RECEIVED:0}}],
+  chemicalNorms:[{warehouseId:'LAF',productionOrder:'DH_CONF',purchaseOrder:'PO_C',model:'M1',color:'X',materialCode:'M_CONF',materialName:'Vải',unit:'M',operation:'Chặt',sourceOrderQty:500,sourceQuantity:1000}],
+  confirmedWip:{active:true,rows:{'LAF|DH_CONF':250}},
+ },'LAF',{mode:'planned'});
+ assert.equal(calc.rows.length,1);
+ assert.equal(calc.rows[0].basisQty,250);
+ assert.equal(calc.rows[0].quantity,500);
+});

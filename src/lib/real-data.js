@@ -32,6 +32,7 @@ export function unpackRealDataBundle(bundle) {
     importMeta: bundle.importMeta || {},
     workshopCounts: bundle.workshopCounts || null,
     materialIssues: bundle.materialIssues || [],
+    workshopWipReports: bundle.workshopWipReports || [],
     bundleGeneratedAt: bundle.generatedAt || '',
     bundleSourceDir: bundle.sourceDir || '',
   };

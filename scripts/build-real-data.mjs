@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { importTaskWorkbook } from '../src/lib/task-workbooks.js';
 import { readWorkshopCounts, readMaterialIssueWorkbook, readBomDemandWorkbook } from '../src/lib/inventory-snapshot.js';
+import { readWorkshopWipReport } from '../src/lib/wip-reconcile.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -27,6 +28,7 @@ async function main() {
   const wbPath = path.join(realDataDir, 'Mau_01_Thong_Ke_Xuong_Doi_Chieu_Kiem_Ke-v4_tu_dong_phan_bo_theo_nha_may_da_sua_loi.xlsx');
   const poIssuePath = path.join(realDataDir, 'chi tiet vat tu thuc xuat theo so po.xlsx');
   const bomDemandPath = path.join(realDataDir, 'DM NHU CAU THEO BOM.xlsx');
+  const wipReportPath = path.join(realDataDir, 'DON HANG DO DANG THUC TE XUONG BAO CAO.xlsx');
 
   const td = await importTaskWorkbook('production-orders', fileFromDisk(tdPath, 'TIEN-DO-SX-DONHANG.xlsx'));
   const hm = await importTaskWorkbook('chemical-norms:HOA_MAU_LAF', fileFromDisk(hmPath, 'DM-MATHANG-HOAMAU LAF-CANLUYEN.xlsx'));
@@ -38,6 +40,9 @@ async function main() {
   const poIssues = fs.existsSync(poIssuePath) ? await readMaterialIssueWorkbook(fileFromDisk(poIssuePath, 'chi tiet vat tu thuc xuat theo so po.xlsx')) : { rows: [] };
   const bomDemand = fs.existsSync(bomDemandPath)
     ? await readBomDemandWorkbook(fileFromDisk(bomDemandPath, 'DM NHU CAU THEO BOM.xlsx'), { workshopCounts: counts.rows, materialIssues: poIssues.rows, materials: wb.materials })
+    : { rows: [] };
+  const wipReport = fs.existsSync(wipReportPath)
+    ? await readWorkshopWipReport(fileFromDisk(wipReportPath, 'DON HANG DO DANG THUC TE XUONG BAO CAO.xlsx'))
     : { rows: [] };
 
   const nowIso = new Date().toISOString();
@@ -91,6 +96,7 @@ async function main() {
     },
     workshopCounts: counts,
     materialIssues: poIssues.rows,
+    workshopWipReports: wipReport.rows,
     importMeta: {
       'production-orders': {
         taskId: 'production-orders',

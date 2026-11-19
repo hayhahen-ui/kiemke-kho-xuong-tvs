@@ -64,6 +64,8 @@ export function calculateInventorySnapshot(data, warehouseId, { mode, issuedRows
   for (const order of original) { const k=key(commandFor(order),order.model,order.color); frequencies.set(k,(frequencies.get(k)||0)+1); }
   const selectedNorms = active(data.chemicalNorms,data.importMeta,`chemical-norms:${warehouseId}`).filter(r=>r.warehouseId===warehouseId);
   const normKeys = new Set(selectedNorms.map(n=>key(n.productionOrder,n.model,n.color)));
+  const confirmedPlant = (warehouseId === 'LAF' || warehouseId === 'HOA_MAU_LAF') ? 'LAF' : 'LVF';
+  const confirmedRows = data.confirmedWip?.active && mode !== 'issued' ? (data.confirmedWip.rows || {}) : null;
   const orders = original.map(order => {
     const command = commandFor(order);
     const k = key(command,order.model,order.color);
@@ -76,9 +78,16 @@ export function calculateInventorySnapshot(data, warehouseId, { mode, issuedRows
       if (candidates.length > 1) issues.push({ ...order, reason:'Trùng dòng số đôi đã lĩnh cho cùng kho/chỉ lệnh/mã hàng/màu.' });
     }
     const effectiveStages = resolveEffectiveStageQuantities(order.stageQuantities);
-    const done = numberOrNull(effectiveStages?.[stage.key]);
+    let done = numberOrNull(effectiveStages?.[stage.key]);
     let remaining = 0;
-    if (frequencies.get(k) > 1) {
+    if (confirmedRows) {
+      const ck = `${confirmedPlant}|${norm(command)}`;
+      const ckOrig = `${confirmedPlant}|${norm(order.orderNo)}`;
+      const hasConfirm = Object.prototype.hasOwnProperty.call(confirmedRows, ck) || Object.prototype.hasOwnProperty.call(confirmedRows, ckOrig);
+      const rawConfirm = Object.prototype.hasOwnProperty.call(confirmedRows, ck) ? Number(confirmedRows[ck]) : Number(confirmedRows[ckOrig]);
+      remaining = hasConfirm && Number.isFinite(rawConfirm) && rawConfirm > 0 ? rawConfirm : 0;
+      done = qty !== null ? Math.max(0, qty - remaining) : 0;
+    } else if (frequencies.get(k) > 1) {
       issues.push({...order, reason:'Trùng chỉ lệnh + mã hàng + màu trong tiến độ; chưa tính để tránh nhân đôi.'});
     } else if (qty === null || done === null) {
       issues.push({ ...order, reason: qty === null ? 'Thiếu số đôi cơ sở tại kho (hoặc chưa có dòng số đôi đã lĩnh).' : `Thiếu/không hợp lệ số đã ${stage.label}.` });

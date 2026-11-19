@@ -17,6 +17,7 @@ const WATCHED_FILES = [
   'Mau_01_Thong_Ke_Xuong_Doi_Chieu_Kiem_Ke-v4_tu_dong_phan_bo_theo_nha_may_da_sua_loi.xlsx',
   'chi tiet vat tu thuc xuat theo so po.xlsx',
   'DM NHU CAU THEO BOM.xlsx',
+  'DON HANG DO DANG THUC TE XUONG BAO CAO.xlsx',
 ];
 
 function log(msg) {
