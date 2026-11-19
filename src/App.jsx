@@ -22,8 +22,6 @@ const navItems = [
   { id: 'data-entry', label: 'Tác vụ nhập liệu', icon: ClipboardList },
   { id: 'catalog', label: 'Danh mục & BOM', icon: Boxes },
   { id: 'norms', label: 'Định mức BTP LAF', icon: Settings2 },
-  { id: 'inventory', label: 'Kiểm kê (bảng cũ)', icon: ClipboardCheck },
-  { id: 'requirements', label: 'Nhu cầu lý thuyết (cũ)', icon: ArrowLeftRight },
 ];
 
 function mergeRows(existing, incoming, keyOf) {
@@ -573,18 +571,19 @@ function App() {
           {page === 'guide' && <GuidePage data={data} setPage={setPageSafe} onOpenWarehouse={openWarehouseSnapshot} />}
           {page === 'orders' && <OrdersPage data={data} onAdd={() => setModal('order')} onProgress={updateOrderProgress} />}
           {page === 'snapshot' && <SnapshotPage data={data} selectedWarehouse={selectedWarehouse} setWarehouse={setSelectedWarehouse} onSaveCounts={saveWorkshopCounts} onSaveMaterialIssues={saveMaterialIssues} onSaveBomDemand={saveBomDemand} />}
-          {page === 'requirements' && <RequirementsPage data={data} selectedWarehouse={selectedWarehouse} setWarehouse={setSelectedWarehouse} onExport={exportTask} onImport={importTask} busyTask={busyTask} />}
-          {page === 'inventory' && <InventoryPage data={data} rows={currentRows} selectedPlant={selectedPlant} setPlant={setSelectedPlant} onUpdate={updateInventory} />}
           {page === 'catalog' && <CatalogPage data={data} tab={catalogTab} setTab={setCatalogTab} onAddMaterial={() => setModal('material')} onAddBom={() => setModal('bom')} />}
           {page === 'norms' && <NormsPage data={data} onAdd={() => setModal('norm')} />}
           {page === 'data-entry' && <DataTasksPage data={data} onImport={importTask} onExport={exportTask} onLoadReal={loadRealDataset} busyTask={busyTask} taskErrors={taskErrors} onOpen={(taskId) => {
             if (taskId === 'orders' || taskId === 'wip' || taskId === 'production-orders') setPageSafe('orders');
             else if (taskId === 'order-mapping') setPageSafe('orders');
-            else if (taskId === 'product-mapping') { setSelectedWarehouse('LAF'); setPageSafe('requirements'); }
+            else if (taskId === 'product-mapping') openWarehouseSnapshot('LAF');
             else if (taskId === 'materials' || taskId === 'bom') { setCatalogTab(taskId); setPageSafe('catalog'); }
             else if (taskId === 'norms') { setPageSafe('norms'); setModal('norm'); }
-            else if (taskId.startsWith('inventory:')) { setSelectedPlant(taskId.slice('inventory:'.length)); setPageSafe('inventory'); }
-            else if (taskId.startsWith('chemical-norms:')) { setSelectedWarehouse(taskId.slice('chemical-norms:'.length)); setPageSafe('requirements'); }
+            else if (taskId.startsWith('inventory:')) {
+              const p = taskId.slice('inventory:'.length);
+              openWarehouseSnapshot(p === 'HOA_MAU' ? 'HOA_MAU_LAF' : p);
+            }
+            else if (taskId.startsWith('chemical-norms:')) openWarehouseSnapshot(taskId.slice('chemical-norms:'.length));
           }} />}
         </div>
       </main>
@@ -1411,6 +1410,61 @@ function GuidePage({ data, setPage, onOpenWarehouse }) {
     HOA_MAU_LVF: countRows.filter((r) => r.warehouseId === 'HOA_MAU_LVF').length,
     LVF: countRows.filter((r) => r.warehouseId === 'LVF').length,
   };
+  const warehouseExamples = useMemo(() => {
+    const specs = [
+      { id: 'HOA_MAU_LAF', name: 'Kho Hóa mẫu LAF', stageLabel: 'Chặt (S − U)', lvfStage: '' },
+      { id: 'HOA_MAU_LVF', name: 'Kho Hóa mẫu LVF', stageLabel: 'May + Gò (S − V / W)', lvfStage: 'both' },
+      { id: 'LAF', name: 'Kho xưởng LAF', stageLabel: 'Chặt (S − U)', lvfStage: '' },
+      { id: 'LVF', name: 'Kho xưởng LVF', stageLabel: 'May + Gò (S − V / W)', lvfStage: 'both' },
+    ];
+    const materialIssues = data.materialIssues || [];
+    const prodOrders = data.productionOrders || [];
+    const score = (r) => {
+      let s = 0;
+      if (r.actual !== null && r.actual !== undefined) s += 100;
+      if ((Number(r.quantity) || 0) > 0) s += 50;
+      if ((r.details?.length || 0) > 0) s += 30;
+      if ((Number(r.issuedFromMain) || 0) > 0) s += 20;
+      if ((Number(r.actual) || 0) > 0) s += 10;
+      return s;
+    };
+    return specs.map((spec) => {
+      const calc = calculateInventorySnapshot(data, spec.id, { mode: 'planned', lvfStage: spec.lvfStage });
+      const cmp = compareSnapshotCounts(calc, countRows, spec.id, { materialIssues, lvfStage: spec.lvfStage, productionOrders: prodOrders });
+      const merged = mergeRowsByMaterialName(cmp);
+      const picked = [...merged].sort((a, b) => score(b) - score(a) || (Number(b.quantity) || 0) - (Number(a.quantity) || 0))[0] || null;
+      if (!picked) return { ...spec, picked: null, orderRows: [], totalOrderQty: 0, totalDoneQty: 0, totalWipQty: 0 };
+      const orderMap = new Map();
+      for (const d of picked.details || []) {
+        const k = `${d.orderNo}|${d.model}|${d.color}`;
+        if (!orderMap.has(k)) {
+          orderMap.set(k, {
+            orderNo: d.orderNo,
+            purchaseOrder: d.purchaseOrder || '',
+            model: d.model,
+            color: d.color,
+            qty: Number(d.qty) || 0,
+            done: Number(d.done) || 0,
+            basisQty: Number(d.basisQty) || 0,
+            quantity: 0,
+            rate: Number(d.rate) || 0,
+            stage: d.stage || spec.stageLabel,
+            source: d.source || '',
+          });
+        }
+        orderMap.get(k).quantity += Number(d.quantity) || 0;
+      }
+      const orderRows = [...orderMap.values()].sort((a, b) => b.quantity - a.quantity);
+      return {
+        ...spec,
+        picked,
+        orderRows,
+        totalOrderQty: orderRows.reduce((sum, o) => sum + o.qty, 0),
+        totalDoneQty: orderRows.reduce((sum, o) => sum + o.done, 0),
+        totalWipQty: orderRows.reduce((sum, o) => sum + o.basisQty, 0),
+      };
+    });
+  }, [data, countRows]);
   const fileSheetGuide = [
     {
       file: 'TIEN-DO-SX-DONHANG.xlsx',
@@ -1590,7 +1644,110 @@ function GuidePage({ data, setPage, onOpenWarehouse }) {
 
     <section className="panel" style={{ padding: 20, marginBottom: 16 }}>
       <div className="panel-heading" style={{ padding: '0 0 14px' }}>
-        <div><h2>2. Diễn giải chi tiết từng File, từng Sheet & Mục đích dữ liệu</h2><p>Bảng ánh xạ đầy đủ 5 file nguồn trong <code>O:\1 KHOI VAN HANH\BO PHAN KHO\KIEM KE KHO - XUONG</code> vào lõi kiểm kê 4 kho</p></div>
+        <div>
+          <h2>2. Ví dụ kiểm chứng dòng chảy dữ liệu thực tế (4 kho)</h2>
+          <p>Lấy trực tiếp 1 vật tư có đầy đủ thông tin tại mỗi kho từ dữ liệu đang chạy để chứng minh công thức: <strong>Tổng SL đơn hàng (S) − Đã SX công đoạn = SL dở dang → × Định mức = Nhu cầu lý thuyết → So với Thực đếm = Thừa / Thiếu</strong>.</p>
+        </div>
+        <span className="period-badge">KIỂM CHỨNG TRỰC TIẾP</span>
+      </div>
+      <div className="table-scroll" style={{ marginBottom: 16 }}>
+        <table>
+          <thead>
+            <tr>
+              <th>KHO & CÔNG ĐOẠN</th>
+              <th>MÃ / TÊN VẬT TƯ TIÊU BIỂU</th>
+              <th className="numeric">SỐ CHỈ LỆNH</th>
+              <th className="numeric">TỔNG SL ĐƠN (ĐÔI)</th>
+              <th className="numeric">ĐÃ SX (ĐÔI)</th>
+              <th className="numeric">SL DỞ DANG (ĐÔI)</th>
+              <th className="numeric">NHU CẦU LÝ THUYẾT</th>
+              <th className="numeric">THỰC LÃNH KHO TỔNG</th>
+              <th className="numeric">KIỂM ĐẾM THỰC TẾ</th>
+              <th className="numeric">THỪA / THIẾU</th>
+              <th>KIỂM TRA</th>
+            </tr>
+          </thead>
+          <tbody>
+            {warehouseExamples.map((ex) => {
+              const p = ex.picked;
+              const diff = p && p.variance !== null && p.variance !== undefined ? p.variance : null;
+              const diffLabel = diff === null ? 'Chưa đếm' : diff > 0.0001 ? `Thừa +${money(diff, 2)}` : diff < -0.0001 ? `Thiếu ${money(diff, 2)}` : 'Khớp (0)';
+              return (
+                <tr key={ex.id}>
+                  <td><strong>{ex.name}</strong><small>{ex.stageLabel}</small></td>
+                  <td>{p ? <><strong>{p.materialCode}</strong>{p.materialColor ? ` · ${p.materialColor}` : ''}<small>{p.materialName} ({p.unit})</small></> : 'Chưa có dữ liệu'}</td>
+                  <td className="numeric">{p ? money(ex.orderRows.length) : '—'}</td>
+                  <td className="numeric">{p ? money(ex.totalOrderQty) : '—'}</td>
+                  <td className="numeric">{p ? money(ex.totalDoneQty) : '—'}</td>
+                  <td className="numeric strong-cell">{p ? money(ex.totalWipQty) : '—'}</td>
+                  <td className="numeric strong-cell">{p?.quantity == null ? '—' : `${money(p.quantity, 2)} ${p.unit}`}</td>
+                  <td className="numeric">{p?.issuedFromMain == null ? '—' : money(p.issuedFromMain, 2)}</td>
+                  <td className="numeric strong-cell">{p?.actual == null ? 'Chưa đếm' : `${money(p.actual, 2)} ${p.unit}`}</td>
+                  <td className={`numeric strong-cell ${diff === null ? '' : diff < -0.0001 ? 'text-danger' : diff > 0.0001 ? 'text-warning' : ''}`}>{diffLabel}</td>
+                  <td><button type="button" className="text-button" onClick={() => onOpenWarehouse(ex.id)}>Mở kho →</button></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 14 }}>
+        {warehouseExamples.map((ex) => {
+          const p = ex.picked;
+          if (!p) return null;
+          const diff = p.variance !== null && p.variance !== undefined ? p.variance : null;
+          return (
+            <div key={ex.id} style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, background: 'var(--surface-soft, rgba(255,255,255,0.02))' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 8 }}>
+                <div>
+                  <span className="plant-tag">{ex.name} · {ex.stageLabel}</span>
+                  <div style={{ marginTop: 6 }}><strong>{p.materialCode}</strong>{p.materialColor ? ` (${p.materialColor})` : ''} — {p.materialName}</div>
+                </div>
+                <button type="button" className="text-button" onClick={() => onOpenWarehouse(ex.id)}>Đối chiếu →</button>
+              </div>
+              <div style={{ fontSize: 13, lineHeight: 1.6, marginBottom: 10 }}>
+                <div><strong>1. Tiến độ đơn hàng ({ex.orderRows.length} chỉ lệnh dở dang):</strong> Tổng đặt <strong>{money(ex.totalOrderQty)}</strong> đôi − Đã SX <strong>{money(ex.totalDoneQty)}</strong> đôi = <strong>{money(ex.totalWipQty)} đôi dở dang</strong>.</div>
+                <div><strong>2. Nhu cầu lý thuyết:</strong> ∑(SL dở dang × Định mức/đôi) = <strong>{money(p.quantity, 2)} {p.unit}</strong>{p.issuedFromMain != null ? ` · Thực lãnh kho tổng (PO dở dang): ${money(p.issuedFromMain, 2)} ${p.unit}` : ''}.</div>
+                <div><strong>3. Đối chiếu kiểm đếm:</strong> Thực đếm <strong>{p.actual == null ? 'Chưa đếm' : `${money(p.actual, 2)} ${p.unit}`}</strong> − Lý thuyết <strong>{money(p.quantity, 2)} {p.unit}</strong> = <strong className={diff === null ? '' : diff < -0.0001 ? 'text-danger' : 'text-warning'}>{diff === null ? 'Chưa đủ dữ liệu đếm' : diff > 0.0001 ? `Thừa +${money(diff, 2)} ${p.unit}` : diff < -0.0001 ? `Thiếu ${money(diff, 2)} ${p.unit}` : `Khớp 0 ${p.unit}`}</strong>.</div>
+              </div>
+              {ex.orderRows.length > 0 && (
+                <div className="table-scroll">
+                  <table style={{ fontSize: 12 }}>
+                    <thead>
+                      <tr>
+                        <th>CHỈ LỆNH / PO</th>
+                        <th className="numeric">SL ĐƠN</th>
+                        <th className="numeric">ĐÃ SX</th>
+                        <th className="numeric">DỞ DANG</th>
+                        <th className="numeric">LÝ THUYẾT ({p.unit})</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ex.orderRows.slice(0, 3).map((o, i) => (
+                        <tr key={i}>
+                          <td><strong>{o.orderNo}</strong><small>{o.purchaseOrder || o.model}</small></td>
+                          <td className="numeric">{money(o.qty)}</td>
+                          <td className="numeric">{money(o.done)}</td>
+                          <td className="numeric">{money(o.basisQty)}</td>
+                          <td className="numeric strong-cell">{money(o.quantity, 2)}</td>
+                        </tr>
+                      ))}
+                      {ex.orderRows.length > 3 && (
+                        <tr><td colSpan={5} style={{ textAlign: 'center', opacity: 0.75 }}>... và {money(ex.orderRows.length - 3)} chỉ lệnh dở dang khác (bấm "Mở kho" → "Theo đơn" để xem đầy đủ)</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+
+    <section className="panel" style={{ padding: 20, marginBottom: 16 }}>
+      <div className="panel-heading" style={{ padding: '0 0 14px' }}>
+        <div><h2>3. Diễn giải chi tiết từng File, từng Sheet & Mục đích dữ liệu</h2><p>Bảng ánh xạ đầy đủ 5 file nguồn trong <code>O:\1 KHOI VAN HANH\BO PHAN KHO\KIEM KE KHO - XUONG</code> vào lõi kiểm kê 4 kho</p></div>
       </div>
       <div className="table-scroll">
         <table>
@@ -1618,7 +1775,7 @@ function GuidePage({ data, setPage, onOpenWarehouse }) {
 
     <section className="panel" style={{ padding: 20, marginBottom: 16 }}>
       <div className="panel-heading" style={{ padding: '0 0 14px' }}>
-        <div><h2>3. Quy trình tự động đồng bộ từ ổ O: & đối chiếu 4 kho (4 bước)</h2><p>Cập nhật file trên ổ mạng → Tự đẩy lên Web Online → Kiểm kê & Xuất Excel</p></div>
+        <div><h2>4. Quy trình tự động đồng bộ từ ổ O: & đối chiếu 4 kho (4 bước)</h2><p>Cập nhật file trên ổ mạng → Tự đẩy lên Web Online → Kiểm kê & Xuất Excel</p></div>
       </div>
       <div className="guide-steps-grid">
         {steps.map((step) => (
@@ -1637,7 +1794,7 @@ function GuidePage({ data, setPage, onOpenWarehouse }) {
 
     <section className="panel" style={{ padding: 20 }}>
       <div className="panel-heading" style={{ padding: '0 0 12px' }}>
-        <div><h2>4. Sơ đồ các màn hình trên Web</h2><p>Chức năng chính của từng mục trong thanh menu bên trái</p></div>
+        <div><h2>5. Sơ đồ các màn hình trên Web</h2><p>Chức năng chính của từng mục trong thanh menu bên trái</p></div>
       </div>
       <div className="sitemap-grid">
         <button type="button" className="sitemap-card" onClick={() => setPage('overview')}><strong>Tổng quan</strong><span>Xem nhanh số liệu 4 kho LAF/LVF, số mã đã tính, số mã đã đếm và cảnh báo.</span></button>
