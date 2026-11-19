@@ -32,11 +32,13 @@ export function unpackRealDataBundle(bundle) {
     importMeta: bundle.importMeta || {},
     workshopCounts: bundle.workshopCounts || null,
     materialIssues: bundle.materialIssues || [],
+    bundleGeneratedAt: bundle.generatedAt || '',
+    bundleSourceDir: bundle.sourceDir || '',
   };
 }
 
 export async function fetchRealDataBundle() {
-  const response = await fetch('/real-data-bundle.json');
+  const response = await fetch(`/real-data-bundle.json?t=${Date.now()}`, { cache: 'no-store' });
   if (!response.ok) {
     throw new Error(`Không tải được gói dữ liệu thực tế (${response.status}).`);
   }

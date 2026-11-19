@@ -105,6 +105,19 @@ test('BTP LAF takes priority over matrix, never silently adds or substitutes',()
  const x=calculateInventorySnapshot({...data,norms:[{catalogNo:1,productKey:'C_1',size:'4',rate:.1,wipQty:null}]},'LAF',{mode:'planned'});
  assert.equal(x.rows.length,0); assert.ok(x.unmapped.some(r=>r.reason.includes('ưu tiên BTP')));
 });
+test('DM_BTP_Size_LAF calculates LAF stock when wipQty or size plannedQty breakdown is provided',()=>{
+ const withPlanned=calculateInventorySnapshot({
+  ...data,
+  norms:[
+   {catalogNo:1,materialCode:'M1',materialName:'Giấy Roki',unit:'TỜ',productKey:'C_1',size:'4',process:'Tẩy',rate:0.1,plannedQty:20,wipQty:null},
+   {catalogNo:1,materialCode:'M1',materialName:'Giấy Roki',unit:'TỜ',productKey:'C_1',size:'5',process:'Tẩy',rate:0.2,plannedQty:80,wipQty:null},
+  ],
+ },'LAF',{mode:'planned'});
+ assert.equal(withPlanned.rows.length,1);
+ assert.equal(withPlanned.rows[0].source,'DM_BTP_Size_LAF');
+ // weightedRate = (0.1*20 + 0.2*80) / 100 = 0.18; remaining = 300 pairs -> 54
+ assert.ok(Math.abs(withPlanned.rows[0].quantity - 54) < 1e-6);
+});
 test('numeric material code formatting can be matched only uniquely',async()=>{
  const {compareSnapshotCounts}=await import('./inventory-snapshot.js');
  const result={summary:[{materialCode:'003370',unit:'KÍ',quantity:3}],hasSource:true,unmapped:[],orderCount:1};

@@ -94,12 +94,121 @@ export function calculateInventorySnapshot(data, warehouseId, { mode, issuedRows
   });
   // Warehouse stages are authoritative. Explicit conflicting BOM stages require review.
   const filteredBom = [];
-  // Source workbook gives BTP priority per catalog number. Without WIP by
-  // size and a safe allocation to orders, do not substitute a matrix rate.
+  // Source workbook gives BTP priority per catalog number. When DM_BTP_Size_LAF
+  // supplies explicit wipQty or a size plannedQty breakdown, compute LAF stock
+  // directly from BTP norms; otherwise flag for review without matrix fallback.
   const btpCatalog = new Set((data.norms || []).map(n => String(n.catalogNo)));
-  if (warehouseId === 'LAF') for (const catalogNo of btpCatalog) {
-    const material = (data.materials || []).find(m => String(m.catalogNo) === catalogNo);
-    issues.push({materialCode:material?.materialCode || catalogNo, reason:'Vật tư ưu tiên BTP theo size/công đoạn; chưa tính vì cần số dở dang theo size và phân bổ tương ứng tại thời điểm kiểm kê.'});
+  const btpRows = [];
+  if (warehouseId === 'LAF' && btpCatalog.size) {
+    const colorCodesByOrder = new Map();
+    for (const c of data.chemicalNorms || []) {
+      if (!c.colorCode) continue;
+      const ck = [c.productionOrder, c.model, c.color].map(norm).join('|');
+      if (!colorCodesByOrder.has(ck)) colorCodesByOrder.set(ck, new Set());
+      colorCodesByOrder.get(ck).add(norm(c.colorCode));
+    }
+    const orderMatchKeys = (order) => {
+      const set = new Set();
+      const m = norm(order.model);
+      const col = norm(order.color);
+      if (m && col) set.add(`${m}_${col}`);
+      const ck = [order.orderNo, order.model, order.color].map(norm).join('|');
+      for (const cc of colorCodesByOrder.get(ck) || []) set.add(`${m}_${cc}`);
+      return set;
+    };
+    const normsByCatalog = new Map();
+    for (const n of data.norms || []) {
+      const cat = String(n.catalogNo);
+      if (!normsByCatalog.has(cat)) normsByCatalog.set(cat, []);
+      normsByCatalog.get(cat).push(n);
+    }
+    for (const [catalogNo, catNorms] of normsByCatalog) {
+      const material = (data.materials || []).find(m => String(m.catalogNo) === catalogNo);
+      const materialCode = material?.materialCode || catNorms[0]?.materialCode || catalogNo;
+      const materialName = material?.name || catNorms[0]?.materialName || '';
+      const unit = material?.unit || catNorms[0]?.unit || '';
+      const explicitWip = catNorms.filter(n => Number(n.wipQty) > 0 && Number(n.rate) > 0);
+      const withPlanned = catNorms.filter(n => Number(n.plannedQty) > 0 && Number(n.rate) > 0);
+      if (explicitWip.length) {
+        for (const n of explicitWip) {
+          const basisQty = Number(n.wipQty);
+          const rate = Number(n.rate);
+          btpRows.push({
+            warehouseId: 'LAF',
+            orderNo: `BTP-${n.productKey}${n.size ? `-S${n.size}` : ''}`,
+            purchaseOrder: '',
+            model: n.productKey || '',
+            color: n.size ? `Size ${n.size}` : '',
+            stage: n.process || stage.label,
+            basisType: `WIP theo size (${n.process || 'BTP LAF'})`,
+            qty: Number(n.plannedQty) || basisQty,
+            done: 0,
+            basisQty,
+            materialCode,
+            materialName,
+            materialColor: '',
+            unit,
+            rate,
+            quantity: rate * basisQty,
+            source: 'DM_BTP_Size_LAF',
+            sourceRow: n.sourceRow || '',
+          });
+        }
+      } else if (withPlanned.length) {
+        const byProd = new Map();
+        for (const n of withPlanned) {
+          const pk = norm(n.productKey);
+          if (!byProd.has(pk)) byProd.set(pk, { sumWeighted: 0, sumPlanned: 0, processes: new Set(), sourceRow: n.sourceRow || '' });
+          const g = byProd.get(pk);
+          g.sumWeighted += Number(n.rate) * Number(n.plannedQty);
+          g.sumPlanned += Number(n.plannedQty);
+          if (n.process) g.processes.add(n.process);
+        }
+        const alreadyCovered = new Set(
+          (data.chemicalNorms || [])
+            .filter(c => c.warehouseId === 'LAF' && canonicalCode(c.materialCode) === canonicalCode(materialCode))
+            .map(c => norm(c.productionOrder))
+        );
+        let addedForCatalog = 0;
+        for (const order of orders) {
+          const remaining = Number(order.productionQty) || 0;
+          if (remaining <= 0) continue;
+          if (alreadyCovered.has(norm(order.orderNo))) continue;
+          const mKeys = orderMatchKeys(order);
+          let hit = null;
+          for (const mk of mKeys) { if (byProd.has(mk)) { hit = byProd.get(mk); break; } }
+          if (!hit || !(hit.sumPlanned > 0)) continue;
+          const weightedRate = hit.sumWeighted / hit.sumPlanned;
+          const base = bases.get(key(order.orderNo, order.model, order.color)) || { qty: order.plannedQty, done: 0, remaining };
+          btpRows.push({
+            warehouseId: 'LAF',
+            orderNo: order.orderNo,
+            purchaseOrder: order.purchaseOrder || '',
+            model: order.model,
+            color: order.color,
+            stage: [...hit.processes].join('/') || stage.label,
+            basisType: `Còn lại tại ${stage.label} (BTP theo size)`,
+            qty: base.qty,
+            done: base.done,
+            basisQty: remaining,
+            materialCode,
+            materialName,
+            materialColor: '',
+            unit,
+            rate: weightedRate,
+            quantity: weightedRate * remaining,
+            source: 'DM_BTP_Size_LAF',
+            sourceRow: hit.sourceRow,
+          });
+          addedForCatalog += 1;
+        }
+        if (!addedForCatalog && !alreadyCovered.size) {
+          issues.push({materialCode, reason:'Vật tư ưu tiên BTP theo size/công đoạn (DM_BTP_Size_LAF); hiện không có chỉ lệnh dở dang khớp mã hàng-màu.'});
+        }
+      } else {
+        issues.push({materialCode, reason:'Vật tư ưu tiên BTP theo size/công đoạn; chưa tính vì cần số dở dang theo size và phân bổ tương ứng tại thời điểm kiểm kê.'});
+      }
+    }
   }
   for (const line of data.bom || []) {
     if (warehouseId === 'LAF' && btpCatalog.has(String(line.catalogNo))) continue;
@@ -113,7 +222,10 @@ export function calculateInventorySnapshot(data, warehouseId, { mode, issuedRows
     } else filteredBom.push(line);
   }
   const calculated = getTheoreticalRequirements({ ...data, productionOrders:orders, orders, bom:filteredBom, _snapshotStrictCoverage:true, importMeta:{...data.importMeta, 'production-orders':undefined} }, warehouseId);
-  const rows = calculated.rows.map(row => ({...row, ...(bases.get(key(row.orderNo,row.model,row.color)) || {}), stage:stage.label, basisType:`Còn lại tại ${stage.label}`}));
+  const rows = [
+    ...calculated.rows.map(row => ({...row, ...(bases.get(key(row.orderNo,row.model,row.color)) || {}), stage:stage.label, basisType:`Còn lại tại ${stage.label}`})),
+    ...btpRows,
+  ];
   const grouped = new Map();
   for (const row of rows) {
     if (!row.unit || !row.materialCode) { issues.push({...row, reason:'Thiếu mã vật tư hoặc đơn vị; chưa cộng vào tổng.'}); continue; }
@@ -122,7 +234,7 @@ export function calculateInventorySnapshot(data, warehouseId, { mode, issuedRows
     const item=grouped.get(k); item.quantity+=row.quantity; item.details.push(row); item.orderKeys.add(key(row.orderNo,row.model,row.color));
   }
   const summary=[...grouped.values()].map(({orderKeys,...x})=>({...x,orderCount:orderKeys.size})).sort((a,b)=>String(a.materialCode).localeCompare(String(b.materialCode),'vi'));
-  return {ready:true,rows,summary,unmapped:[...issues,...calculated.unmapped],hasSource:calculated.hasSource,stage:stage.label,orderCount:original.length};
+  return {ready:true,rows,summary,unmapped:[...issues,...calculated.unmapped],hasSource:calculated.hasSource || btpRows.length > 0,stage:stage.label,orderCount:original.length};
 }
 
 function safeText(value) { if (value == null) return ''; if (typeof value === 'object') { if (value.result !== undefined) return safeText(value.result); if (value.formula || value.sharedFormula) return ''; } return String(value).trim(); }

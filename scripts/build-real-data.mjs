@@ -6,7 +6,9 @@ import { readWorkshopCounts, readMaterialIssueWorkbook, readBomDemandWorkbook } 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
-const realDataDir = path.resolve(rootDir, '..', 'DU LIEU THAT');
+const defaultDriveDir = 'O:\\1 KHOI VAN HANH\\BO PHAN KHO\\KIEM KE KHO - XUONG';
+const fallbackLocalDir = path.resolve(rootDir, '..', 'DU LIEU THAT');
+const realDataDir = process.env.DATA_DIR || (fs.existsSync(defaultDriveDir) ? defaultDriveDir : fallbackLocalDir);
 const publicDir = path.resolve(rootDir, 'public');
 
 function fileFromDisk(filePath, name) {
@@ -38,7 +40,7 @@ async function main() {
     ? await readBomDemandWorkbook(fileFromDisk(bomDemandPath, 'DM NHU CAU THEO BOM.xlsx'), { workshopCounts: counts.rows, materialIssues: poIssues.rows, materials: wb.materials })
     : { rows: [] };
 
-  const nowIso = '2026-11-16T04:00:00.000Z';
+  const nowIso = new Date().toISOString();
   const prodBatchId = 'real-prod-v1';
   const hmLafBatchId = 'real-hmlaf-v1';
 
@@ -72,8 +74,9 @@ async function main() {
   ]);
 
   const bundle = {
-    version: 2,
+    version: 3,
     generatedAt: nowIso,
+    sourceDir: realDataDir,
     materials: wb.materials,
     bom: wb.bom,
     norms: wb.norms,

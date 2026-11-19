@@ -97,33 +97,19 @@ function App() {
         if (!alive) return;
         const hasAnyData = (saved.productionOrders?.length || 0) > 0 || (saved.materials?.length || 0) > 0;
         if (hasAnyData) {
-          const needsMaterialColorUpgrade = saved.materialIssues?.some((m) => m.materialColor === undefined);
-          const hasLegacyDonHangOrders = (saved.orders?.length || 0) > 0 && (saved.productionOrders?.length || 0) > 0;
-          if (!(saved.materialIssues?.length) || !saved.importMeta?.['chemical-norms:LVF'] || needsMaterialColorUpgrade || hasLegacyDonHangOrders) {
-            try {
-              const bundled = await fetchRealDataBundle();
-              if (alive && (bundled.materialIssues?.length || bundled.chemicalNorms?.length)) {
-                const updated = {
-                  ...saved,
-                  orders: hasLegacyDonHangOrders ? [] : (saved.orders || []),
-                  materialIssues: (saved.materialIssues?.length && !needsMaterialColorUpgrade) ? saved.materialIssues : (bundled.materialIssues || []),
-                  chemicalNorms: ((needsMaterialColorUpgrade || !saved.importMeta?.['chemical-norms:LVF']) && bundled.chemicalNorms?.length) ? bundled.chemicalNorms : (saved.chemicalNorms || []),
-                  importMeta: {
-                    ...(bundled.importMeta || {}),
-                    ...(saved.importMeta || {}),
-                    ...(((needsMaterialColorUpgrade || !saved.importMeta?.['chemical-norms:LVF']) && bundled.importMeta) ? {
-                      'chemical-norms:HOA_MAU_LVF': bundled.importMeta['chemical-norms:HOA_MAU_LVF'],
-                      'chemical-norms:LAF': bundled.importMeta['chemical-norms:LAF'],
-                      'chemical-norms:LVF': bundled.importMeta['chemical-norms:LVF'],
-                    } : {}),
-                  },
-                };
-                await saveLocalState(updated);
-                setData(updated);
-                return;
-              }
-            } catch {}
-          }
+          try {
+            const bundled = await fetchRealDataBundle();
+            const isNewerBundle = bundled.bundleGeneratedAt && bundled.bundleGeneratedAt !== saved.bundleGeneratedAt;
+            const needsMaterialColorUpgrade = saved.materialIssues?.some((m) => m.materialColor === undefined);
+            const hasLegacyDonHangOrders = (saved.orders?.length || 0) > 0 && (saved.productionOrders?.length || 0) > 0;
+            const needsSync = isNewerBundle || !(saved.materialIssues?.length) || !saved.importMeta?.['chemical-norms:LVF'] || needsMaterialColorUpgrade || hasLegacyDonHangOrders;
+            if (alive && needsSync && (bundled.productionOrders?.length || bundled.materialIssues?.length || bundled.chemicalNorms?.length)) {
+              const updated = { ...emptyData(), ...bundled };
+              await saveLocalState(updated);
+              setData(updated);
+              return;
+            }
+          } catch {}
           setData(saved);
           return;
         }
@@ -146,6 +132,33 @@ function App() {
     window.clearTimeout(notify.timer);
     notify.timer = window.setTimeout(() => setToast(''), 3200);
   }, []);
+
+  useEffect(() => {
+    if (cloudMode) return undefined;
+    let checking = false;
+    const checkLatestBundle = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const bundled = await fetchRealDataBundle();
+        if (bundled.bundleGeneratedAt && bundled.bundleGeneratedAt !== data.bundleGeneratedAt) {
+          const updated = { ...emptyData(), ...bundled };
+          await saveLocalState(updated);
+          setData(updated);
+          notify('Đã tự động đồng bộ dữ liệu mới nhất từ ổ O:.');
+        }
+      } catch {} finally {
+        checking = false;
+      }
+    };
+    const onVisible = () => { if (document.visibilityState === 'visible') checkLatestBundle(); };
+    const timer = window.setInterval(checkLatestBundle, 5 * 60 * 1000);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [data.bundleGeneratedAt, notify]);
 
   const hydrateCloud = useCallback(async (user) => {
     if (!user || !supabase) return;
@@ -555,7 +568,7 @@ function App() {
         </header>
 
         <div className="page-content">
-          {!cloudMode && <div className="local-notice"><ShieldCheck size={17} /><span><strong>Chế độ thiết bị (IndexedDB).</strong> Dữ liệu từ thư mục <code>DU LIEU THAT</code> đã sẵn sàng để kiểm kê 4 kho. Kết nối Supabase nếu cần nhiều máy cùng sửa đồng thời.</span><button onClick={() => setModal('setup')}>Cách kết nối</button></div>}
+          {!cloudMode && <div className="local-notice"><ShieldCheck size={17} /><span><strong>Đồng bộ tự động từ ổ O:.</strong> Nguồn: <code>O:\1 KHOI VAN HANH\BO PHAN KHO\KIEM KE KHO - XUONG</code>{data.bundleGeneratedAt ? ` · Cập nhật: ${new Date(data.bundleGeneratedAt).toLocaleString('vi-VN')}` : ''}.</span><button onClick={loadRealDataset} disabled={busyTask === 'real-bundle'}>{busyTask === 'real-bundle' ? 'Đang đồng bộ...' : 'Đồng bộ mới nhất'}</button></div>}
           {page === 'overview' && <Dashboard data={data} setPage={setPageSafe} onOpenWarehouse={openWarehouseSnapshot} />}
           {page === 'guide' && <GuidePage data={data} setPage={setPageSafe} onOpenWarehouse={openWarehouseSnapshot} />}
           {page === 'orders' && <OrdersPage data={data} onAdd={() => setModal('order')} onProgress={updateOrderProgress} />}
@@ -1398,36 +1411,81 @@ function GuidePage({ data, setPage, onOpenWarehouse }) {
     HOA_MAU_LVF: countRows.filter((r) => r.warehouseId === 'HOA_MAU_LVF').length,
     LVF: countRows.filter((r) => r.warehouseId === 'LVF').length,
   };
+  const fileSheetGuide = [
+    {
+      file: 'TIEN-DO-SX-DONHANG.xlsx',
+      sheet: 'New',
+      columns: 'Chỉ lệnh, Số PO, Mã hàng, Màu, SL đơn hàng (cột S), SL lệnh SX (cột T), Chặt (U), May (V), Gò (W), Đóng thùng (X), Nhập kho (Y), Giao hàng (Z)',
+      purpose: 'Nguồn duy nhất cho sản lượng đơn hàng & tiến độ sản xuất toàn hệ thống (không lấy DON HANG.xlsx, tự loại bỏ nhóm phụ kiện). Tính số đôi dở dang theo công đoạn (S − U cho LAF; S − V/W cho LVF) và tự suy luận ngược nếu thiếu ghi nhận Chặt/May/Gò nhưng đã Đóng thùng/Nhập kho.',
+    },
+    {
+      file: 'DM-MATHANG-HOAMAU LAF-CANLUYEN.xlsx',
+      sheet: 'DM-NPL-DH',
+      columns: 'Chỉ lệnh, PO, Mã hàng, Mã màu, Tên màu, SL đơn nguồn, Mã hóa chất, Tên hóa chất, Khối lượng định mức, ĐVT',
+      purpose: 'Tính định mức hóa chất & cao su cán luyện trên 1 đôi (= Khối lượng ÷ SL đơn nguồn) và nhân với số đôi dở dang Chặt (S − U) để ra tồn lý thuyết Kho Hóa mẫu LAF.',
+    },
+    {
+      file: 'DM NHU CAU THEO BOM.xlsx',
+      sheet: 'Sheet1',
+      columns: 'Chỉ lệnh ĐH, Số PO, SL đơn hàng, Nhóm lớn/vừa, Mã vật tư, Tên vật tư, Cột AC (Màu / Code màu vật tư), ĐVT, Cột AE (SL theo đơn hàng), Cột AF (SL từng size)',
+      purpose: 'Bổ sung định mức chi tiết theo từng đơn hàng, từng size (ưu tiên cột AF, fallback cột AE) và tách riêng từng Code màu vật tư (VD: AETF, A0QM, BLACK-001...) cho Kho xưởng LAF, Kho xưởng LVF và Kho Hóa mẫu LVF.',
+    },
+    {
+      file: 'chi tiet vat tu thuc xuat theo so po.xlsx',
+      sheet: 'Sheet1',
+      columns: 'Đơn vị yêu cầu, Công đoạn SX, Số chỉ lệnh, Số PO, Nhóm lớn, Mã vật tư, Tên vật tư, Cột AC (Màu / Code màu vật tư), ĐVT, Số lượng xuất kho',
+      purpose: 'Tổng hợp Thực lãnh kho tổng theo từng PO và từng Code màu. Tại sheet TongHop chỉ cộng PO của chỉ lệnh còn dở dang; tại sheet ThucLanh_SoVoi_LyThuyet tách rõ phần Đã hoàn tất/nhập kho, PO ngoài tiến độ, Xuất không gắn PO và liệt kê chi tiết từng số PO.',
+    },
+    {
+      file: 'Mau_01_Thong_Ke_Xuong_Doi_Chieu_Kiem_Ke...xlsx',
+      sheet: '1_Danh_Muc_Va_Ma_Tran_BOM',
+      columns: 'STT danh mục (cột A), Mã vật tư, Tên vật tư, ĐVT, Nhà máy sử dụng (LAF/LVF/Hóa mẫu), Ma trận định mức theo Mã hàng - Màu',
+      purpose: 'Quản lý danh mục vật tư dùng chung đa nhà máy (gắn kho đích) và làm định mức BOM ma trận dự phòng cho các đơn chưa có trong DM NHU CAU THEO BOM.',
+    },
+    {
+      file: 'Mau_01_Thong_Ke_Xuong_Doi_Chieu_Kiem_Ke...xlsx',
+      sheet: 'DM_BTP_Size_LAF',
+      columns: 'STT danh mục, Mã vật tư, Tên vật tư, ĐVT, Mã hàng - màu, Size, Công đoạn LAF (VD: Tẩy...), Định mức / 1 đôi, SL kế hoạch theo size, SL WIP LAF theo size',
+      purpose: 'Định mức bán thành phẩm (BTP) chi tiết theo size & công đoạn nhà máy LAF. Hệ thống ưu tiên tính tồn lý thuyết Kho xưởng LAF từ sheet này (theo SL WIP từng size hoặc định mức bình quân gia quyền theo cơ cấu size kế hoạch) thay cho BOM ma trận.',
+    },
+    {
+      file: 'Mau_01_Thong_Ke_Xuong_Doi_Chieu_Kiem_Ke...xlsx',
+      sheet: '2_Kho_Hoa_Mau · 3_Kho_Xuong_LAF · 4_Kho_Xuong_LVF',
+      columns: 'STT danh mục (cột B), Kiểm kê thực tế (cột M), Phân kho Hóa mẫu LAF/LVF (cột T tại sheet 2_Kho_Hoa_Mau)',
+      purpose: 'Nạp số liệu kiểm đếm thực tế hiện trường cho đủ 4 kho (giữ nguyên phân biệt giữa ô trống = Chưa đếm và số 0 thực tế) để tính Chênh lệch tạm tính so với tồn lý thuyết dở dang.',
+    },
+  ];
+
   const steps = [
     {
       num: '1',
-      title: 'Nạp Tiến độ & Lệnh sản xuất',
-      file: 'TIEN-DO-SX-DONHANG.xlsx (sheet New)',
-      detail: 'Đọc cột S (SL đơn hàng), cột T (SL lệnh SX), cột U (Chặt), cột V (May), cột W (Gò). Hệ thống tự tính dở dang = Cơ sở − Đã SX (chiều dương, không dùng X/Y/Z bị âm).',
+      title: 'Cập nhật 5 file nguồn trong ổ O:',
+      file: 'O:\\1 KHOI VAN HANH\\BO PHAN KHO\\KIEM KE KHO - XUONG',
+      detail: 'Chỉ cần lưu đè hoặc cập nhật trực tiếp 5 file Excel (TIEN-DO-SX-DONHANG, DM-MATHANG-HOAMAU LAF, DM NHU CAU THEO BOM, chi tiet vat tu thuc xuat theo so po, Mau_01_Thong_Ke) vào đúng thư mục ổ O:.',
       actionLabel: 'Mở Tác vụ nhập liệu',
       onAction: () => setPage('data-entry'),
     },
     {
       num: '2',
-      title: 'Nạp Định mức Hóa mẫu & Ma trận BOM',
-      file: 'DM-MATHANG-HOAMAU LAF-CANLUYEN.xlsx + Mau_01_Thong_Ke...xlsx',
-      detail: 'Hóa mẫu LAF đọc sheet DM-NPL-DH; Hóa mẫu LVF nạp file riêng (không dùng thay bằng LAF). Danh mục, ma trận BOM và BTP theo size LAF nạp từ workbook thống kê.',
-      actionLabel: 'Xem Danh mục & BOM',
-      onAction: () => setPage('catalog'),
+      title: 'Tự động đồng bộ từ ổ O: lên Web Online',
+      file: 'F:\\AI\\KIEKEM\\DongBo_DuLieu_O_LenWeb.bat',
+      detail: 'Chạy file DongBo_DuLieu_O_LenWeb.bat trên máy quản trị. Trình theo dõi quét mỗi 30 giây; khi file Excel thay đổi và đã đóng, hệ thống tự build real-data-bundle.json, đẩy GitHub và cập nhật web Vercel.',
+      actionLabel: 'Xem Định mức BTP LAF',
+      onAction: () => setPage('norms'),
     },
     {
       num: '3',
-      title: 'Nạp Kiểm đếm thực tế 4 kho',
-      file: 'Mau_01_Thong_Ke...xlsx (Bảng B cột M, phân kho Hóa mẫu cột T)',
-      detail: 'Hệ thống tự tách Hóa mẫu LAF (39 mã đã đếm) và Hóa mẫu LVF (13 mã đã đếm) theo cột T, cộng dồn xưởng LAF (14 mã) và xưởng LVF (4 mã). Ô trống giữ là "Chưa đếm", khác với số 0.',
+      title: 'Web tự nhận dữ liệu mới & đối chiếu 4 kho',
+      file: 'Tự kiểm tra mỗi 5 phút · hoặc bấm "Đồng bộ mới nhất"',
+      detail: 'Khi mở web hoặc quay lại tab trình duyệt, web tự so sánh mốc thời gian dữ liệu và tải bản mới nhất về IndexedDB, giữ tách riêng từng Code màu vật tư và tự gom mã trùng tên.',
       actionLabel: 'Mở Tồn theo đơn dở dang',
       onAction: () => onOpenWarehouse('HOA_MAU_LAF'),
     },
     {
       num: '4',
-      title: 'Đối chiếu 4 kho & Rà soát ChuaGhep',
-      file: 'Xuất Excel 4 sheet: ThongTin · TongHop · TheoDon · ChuaGhep',
-      detail: 'Chọn từng kho để xem Tồn lý thuyết theo đơn dở dang, dùng bộ lọc "Đã kiểm đếm" để xem nhanh các mã đã đếm (VD: 009185 = 3,535; 009215 = 2,250; 009218 = 3,010) và mở tab ChuaGhep để xử lý mã thiếu mapping.',
+      title: 'Xuất báo cáo Excel kiểm kê 6 sheet',
+      file: 'ThongTin · TongHop · TheoDon · ChuaGhep · GiaiThich · ThucLanh_SoVoi_LyThuyet',
+      detail: 'Xuất từng kho ra file Excel chuẩn gồm đủ cột Code màu, Đã lãnh kho tổng theo chỉ lệnh dở dang, bảng giải thích đơn thiếu ghi nhận công đoạn và chi tiết từng số PO ở cột M.',
       actionLabel: 'Mở Tổng quan 4 kho',
       onAction: () => setPage('overview'),
     },
@@ -1458,22 +1516,26 @@ function GuidePage({ data, setPage, onOpenWarehouse }) {
 
       <div className="mindmap-canvas">
         <div className="mindmap-col mindmap-inputs">
-          <div className="mm-group-title">NGUỒN DỮ LIỆU ĐẦU VÀO</div>
-          <button type="button" className="mm-node mm-input" onClick={() => setPage('data-entry')}>
+          <div className="mm-group-title">5 FILE NGUỒN (Ổ O:\...\KIEM KE KHO - XUONG)</div>
+          <button type="button" className="mm-node mm-input" onClick={() => setPage('orders')}>
             <strong>TIEN-DO-SX-DONHANG.xlsx</strong>
-            <span>Sheet New · Cột S (SL đơn), U (Chặt), V (May), W (Gò)</span>
+            <span>Sheet New · SL đơn (S), Chặt (U), May (V), Gò (W), Đóng thùng (X), Nhập kho (Y)</span>
           </button>
           <button type="button" className="mm-node mm-input" onClick={() => setPage('data-entry')}>
             <strong>DM-MATHANG-HOAMAU LAF</strong>
-            <span>Sheet DM-NPL-DH · Định mức hóa chất ÷ SL đơn nguồn</span>
+            <span>Sheet DM-NPL-DH · Định mức hóa chất & cao su cán luyện LAF</span>
           </button>
-          <button type="button" className="mm-node mm-input" onClick={() => setPage('catalog')}>
+          <button type="button" className="mm-node mm-input" onClick={() => onOpenWarehouse('LVF')}>
+            <strong>DM NHU CAU THEO BOM.xlsx</strong>
+            <span>Cột AE/AF (từng size) & Cột AC (Code màu) → LAF, LVF, Hóa mẫu LVF</span>
+          </button>
+          <button type="button" className="mm-node mm-input" onClick={() => onOpenWarehouse('HOA_MAU_LAF')}>
+            <strong>chi tiet vat tu thuc xuat theo so po.xlsx</strong>
+            <span>Thực lãnh kho tổng theo PO & Code màu (cột AC) → Đối chiếu 4 kho</span>
+          </button>
+          <button type="button" className="mm-node mm-input" onClick={() => setPage('norms')}>
             <strong>Mau_01_Thong_Ke...xlsx</strong>
-            <span>Danh mục STT · Ma trận BOM · BTP LAF · Thực đếm cột M & T</span>
-          </button>
-          <button type="button" className="mm-node mm-input" onClick={() => setPage('data-entry')}>
-            <strong>Bảng Mapping bổ sung</strong>
-            <span>Mapping Chỉ lệnh (PO/SO) & Mapping Mã hàng - Màu BOM</span>
+            <span>Danh mục STT · Ma trận BOM · DM_BTP_Size_LAF · Thực đếm cột M & T</span>
           </button>
         </div>
 
@@ -1528,7 +1590,35 @@ function GuidePage({ data, setPage, onOpenWarehouse }) {
 
     <section className="panel" style={{ padding: 20, marginBottom: 16 }}>
       <div className="panel-heading" style={{ padding: '0 0 14px' }}>
-        <div><h2>2. Quy trình thao tác nhập liệu & đối chiếu (4 bước)</h2><p>Thực hiện theo thứ tự từ nạp nguồn đến xuất báo cáo kiểm kê</p></div>
+        <div><h2>2. Diễn giải chi tiết từng File, từng Sheet & Mục đích dữ liệu</h2><p>Bảng ánh xạ đầy đủ 5 file nguồn trong <code>O:\1 KHOI VAN HANH\BO PHAN KHO\KIEM KE KHO - XUONG</code> vào lõi kiểm kê 4 kho</p></div>
+      </div>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th style={{ minWidth: 210 }}>FILE NGUỒN</th>
+              <th style={{ minWidth: 160 }}>SHEET LẤY DỮ LIỆU</th>
+              <th style={{ minWidth: 260 }}>THÔNG TIN / CỘT ĐƯỢC LẤY</th>
+              <th style={{ minWidth: 320 }}>MỤC ĐÍCH & NHU CẦU DỮ LIỆU ĐÁP ỨNG</th>
+            </tr>
+          </thead>
+          <tbody>
+            {fileSheetGuide.map((item, idx) => (
+              <tr key={idx}>
+                <td><strong>{item.file}</strong></td>
+                <td><span className="plant-tag">{item.sheet}</span></td>
+                <td>{item.columns}</td>
+                <td>{item.purpose}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section className="panel" style={{ padding: 20, marginBottom: 16 }}>
+      <div className="panel-heading" style={{ padding: '0 0 14px' }}>
+        <div><h2>3. Quy trình tự động đồng bộ từ ổ O: & đối chiếu 4 kho (4 bước)</h2><p>Cập nhật file trên ổ mạng → Tự đẩy lên Web Online → Kiểm kê & Xuất Excel</p></div>
       </div>
       <div className="guide-steps-grid">
         {steps.map((step) => (
@@ -1547,7 +1637,7 @@ function GuidePage({ data, setPage, onOpenWarehouse }) {
 
     <section className="panel" style={{ padding: 20 }}>
       <div className="panel-heading" style={{ padding: '0 0 12px' }}>
-        <div><h2>3. Sơ đồ các màn hình trên Web</h2><p>Chức năng chính của từng mục trong thanh menu bên trái</p></div>
+        <div><h2>4. Sơ đồ các màn hình trên Web</h2><p>Chức năng chính của từng mục trong thanh menu bên trái</p></div>
       </div>
       <div className="sitemap-grid">
         <button type="button" className="sitemap-card" onClick={() => setPage('overview')}><strong>Tổng quan</strong><span>Xem nhanh số liệu 4 kho LAF/LVF, số mã đã tính, số mã đã đếm và cảnh báo.</span></button>

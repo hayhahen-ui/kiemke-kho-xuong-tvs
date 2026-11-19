@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
+    "build:data": "node scripts/build-real-data.mjs",
+    "sync:once": "node scripts/sync-from-drive.mjs --once",
+    "sync:watch": "node scripts/sync-from-drive.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "test": "node --test"
   },
